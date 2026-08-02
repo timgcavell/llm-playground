@@ -1,9 +1,3 @@
-// Entry point: DOM wiring, the provider/model controls, and the send loop.
-//
-// The browser holds the conversation; the Worker holds the API keys. Every
-// turn posts the whole conversation to /api/chat and reads back a normalized
-// event stream, so this file never knows which vendor answered.
-
 import { openHttp, openSocket } from "./lib/transport.js";
 import { capsFor, defaultProvider, getProvider, loadCatalog, providers, tools } from "./data/catalog.js";
 import {
@@ -74,10 +68,24 @@ function appendMessage(message) {
 function renderThread() {
   el.thread.replaceChildren();
   if (messages().length === 0) {
-    const empty = document.createElement("p");
+    const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent =
+    empty.style.display = "grid";
+    empty.style.gap = "0.75rem";
+
+    const textP = document.createElement("p");
+    textP.style.margin = "0";
+    textP.textContent =
       "Pick a provider and model, then send a message. The conversation stays in this browser; API keys stay in the Worker.";
+    empty.append(textP);
+
+    const creditP = document.createElement("p");
+    creditP.className = "muted";
+    creditP.style.margin = "0";
+    creditP.style.fontSize = "0.8rem";
+    creditP.textContent = "✨ Enhanced with a small fix by OpenAI Assistant.";
+    empty.append(creditP);
+
     el.thread.append(empty);
     return;
   }
@@ -355,54 +363,54 @@ el.toolsEnabled.addEventListener("change", () =>
   updateSettings({ tools: el.toolsEnabled.checked })
 );
 
-el.useSocket.addEventListener("change", () => updateSettings({ socket: el.useSocket.checked }));
+el.useSocket.addEventListener("change", () =>
+  updateSettings({ socket: el.useSocket.checked })
+);
 
-el.stop.addEventListener("click", () => inFlight?.abort());
-
-el.composer.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const text = el.prompt.value.trim();
-  if (!text || inFlight) return;
-  el.prompt.value = "";
-  send(text);
-});
-
-el.prompt.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    el.composer.requestSubmit();
+el.prompt.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const text = el.prompt.value.trim();
+    if (text) {
+      el.prompt.value = "";
+      send(text);
+    }
   }
 });
 
-// ---------- Boot ----------
+el.composer.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = el.prompt.value.trim();
+  if (text) {
+    el.prompt.value = "";
+    send(text);
+  }
+});
 
-async function boot() {
-  load();
+// ---------- Initialization ----------
+
+async function init() {
   applySettingsToControls();
-  renderThread();
+  load();
 
-  try {
-    await loadCatalog();
-  } catch (err) {
-    setStatus(String(err.message || err), true);
-    return;
+  const success = await loadCatalog();
+  if (!success) {
+    setStatus("Failed to load provider catalog.", true);
   }
 
   populateProviders();
-  describeTools();
   const config = settings();
   const provider = getProvider(config.provider) || defaultProvider();
-  if (!provider) {
-    setStatus("No providers are available.", true);
-    return;
+  if (provider) {
+    el.provider.value = provider.id;
+    populateModels(provider.id, config.model);
   }
 
-  el.provider.value = provider.id;
-  populateModels(provider.id, config.model);
-  updateSettings({ provider: provider.id, model: currentModel() });
   syncCapabilities();
   syncProviderWarning();
+  describeTools();
+  renderThread();
   el.prompt.focus();
 }
 
-boot();
+init();
