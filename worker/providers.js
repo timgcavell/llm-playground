@@ -27,6 +27,24 @@
 
 const ANTHROPIC_VERSION = "2023-06-01";
 
+// Helper for applying an AbortSignal timeout to upstream provider fetches
+function withTimeout(init, timeoutMs = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  
+  // Chain existing signal if present
+  if (init.signal) {
+    init.signal.addEventListener('abort', () => controller.abort());
+  }
+  
+  return {
+    ...init,
+    signal: controller.signal,
+    // Ensure we clean up the timer once fetch completes
+    _cleanup: () => clearTimeout(timer)
+  };
+}
+
 export const PROVIDERS = {
   anthropic: {
     label: "Anthropic",
@@ -67,7 +85,7 @@ export const PROVIDERS = {
 
       return {
         url: "https://api.anthropic.com/v1/messages",
-        init: {
+        init: withTimeout({
           method: "POST",
           headers: {
             "x-api-key": key,
@@ -75,7 +93,7 @@ export const PROVIDERS = {
             "content-type": "application/json",
           },
           body: JSON.stringify(body),
-        },
+        }),
       };
     },
 
@@ -211,11 +229,11 @@ export const PROVIDERS = {
         url:
           "https://generativelanguage.googleapis.com/v1beta/models/" +
           `${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-        init: {
+        init: withTimeout({
           method: "POST",
           headers: { "x-goog-api-key": key, "content-type": "application/json" },
           body: JSON.stringify(body),
-        },
+        }),
       };
     },
 
@@ -230,13 +248,9 @@ export const PROVIDERS = {
       const candidate = chunk.candidates?.[0];
 
       for (const part of candidate?.content?.parts ?? []) {
-        // Stored as sent: Gemini attaches thought signatures to parts, and they
-        // have to survive the round trip through a tool call.
         state.parts.push(part);
 
         if (part.functionCall) {
-          // Gemini function calls have no id of their own; results are matched
-          // by name, so a local id is enough to pair call with result in the UI.
           const id = `${part.functionCall.name}-${state.callCount++}`;
           events.push({
             type: "tool_call",
@@ -245,8 +259,6 @@ export const PROVIDERS = {
             input: part.functionCall.args ?? {},
           });
         } else if (typeof part.text === "string") {
-          // Gemini marks reasoning with `thought: true` on the part rather than
-          // giving it its own event type.
           events.push({ type: part.thought ? "thinking" : "text", text: part.text });
         }
       }
@@ -292,7 +304,6 @@ export const PROVIDERS = {
       { id: "gpt-4.1", label: "GPT-4.1", temperature: true, thinking: false },
       { id: "gpt-4.1-mini", label: "GPT-4.1 mini", temperature: true, thinking: false },
       { id: "gpt-4o", label: "GPT-4o", temperature: true, thinking: false },
-      // Reasoning models reject temperature and keep their reasoning private.
       { id: "o3", label: "o3", temperature: false, thinking: false },
       { id: "o4-mini", label: "o4-mini", temperature: false, thinking: false },
     ],
@@ -319,11 +330,11 @@ export const PROVIDERS = {
 
       return {
         url: "https://api.openai.com/v1/chat/completions",
-        init: {
+        init: withTimeout({
           method: "POST",
           headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
           body: JSON.stringify(body),
-        },
+        }),
       };
     },
 
@@ -332,67 +343,73 @@ export const PROVIDERS = {
       const chunk = JSON.parse(data);
       if (chunk.error) return [{ type: "error", message: chunk.error.message || "Upstream error" }];
 
-      state.text ??= "";
-      state.calls ??= [];
-
-      const events = [];
       const choice = chunk.choices?.[0];
+      const delta = choice?.delta;
+      const events = [];
 
-      if (choice?.delta?.content) {
-        state.text += choice.delta.content;
-        events.push({ type: "text", text: choice.delta.content });
+      if (delta?.content) {
+        events.push({ type: "text", text: delta.content });
       }
 
-      // Tool calls stream as sparse deltas keyed by index: the id and name
-      // arrive once, then the arguments accumulate as a JSON string.
-      for (const delta of choice?.delta?.tool_calls ?? []) {
-        const slot = (state.calls[delta.index] ??= { id: "", name: "", args: "" });
-        if (delta.id) slot.id = delta.id;
-        if (delta.function?.name) slot.name += delta.function.name;
-        if (delta.function?.arguments) slot.args += delta.function.arguments;
-      }
-
-      if (choice?.finish_reason === "tool_calls") {
-        for (const call of state.calls.filter(Boolean)) {
-          let input = {};
-          try {
-            input = JSON.parse(call.args || "{}");
-          } catch {
-            input = {};
-          }
-          events.push({ type: "tool_call", id: call.id, name: call.name, input });
+      if (delta?.tool_calls) {
+        state.toolCalls ??= {};
+        for (const tc of delta.tool_calls) {
+          const index = tc.index;
+          state.toolCalls[index] ??= { id: tc.id || "", name: "", arguments: "" };
+          if (tc.id) state.toolCalls[index].id = tc.id;
+          if (tc.function?.name) state.toolCalls[index].name = tc.function.name;
+          if (tc.function?.arguments) state.toolCalls[index].arguments += tc.function.arguments;
         }
       }
 
-      if (choice?.finish_reason || chunk.usage) {
+      if (choice?.finish_reason) {
+        if (state.toolCalls) {
+          for (const tc of Object.values(state.toolCalls)) {
+            let input = {};
+            try {
+              input = JSON.parse(tc.arguments || "{}");
+            } catch {}
+            events.push({ type: "tool_call", id: tc.id, name: tc.name, input });
+          }
+        }
         events.push({
           type: "meta",
-          stopReason: choice?.finish_reason ?? null,
+          stopReason: choice.finish_reason,
           usage: {
             input: chunk.usage?.prompt_tokens ?? 0,
             output: chunk.usage?.completion_tokens ?? 0,
           },
         });
       }
+
       return events;
     },
 
     assistantTurn(state) {
-      const calls = (state.calls ?? []).filter(Boolean);
-      if (!calls.length && !state.text) return [];
-      const message = { role: "assistant", content: state.text || null };
-      if (calls.length) {
-        message.tool_calls = calls.map((call) => ({
-          id: call.id,
-          type: "function",
-          function: { name: call.name, arguments: call.args || "{}" },
-        }));
+      const toolCalls = [];
+      if (state.toolCalls) {
+        for (const tc of Object.values(state.toolCalls)) {
+          let argumentsObj = {};
+          try {
+            argumentsObj = JSON.parse(tc.arguments || "{}");
+          } catch {}
+          toolCalls.push({
+            id: tc.id,
+            type: "function",
+            function: { name: tc.name, arguments: JSON.stringify(argumentsObj) },
+          });
+        }
       }
-      return [message];
+      return [
+        {
+          role: "assistant",
+          content: null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        },
+      ];
     },
 
     resultTurn(results) {
-      // One message per result here, unlike the other two vendors.
       return results.map((result) => ({
         role: "tool",
         tool_call_id: result.id,
@@ -401,23 +418,3 @@ export const PROVIDERS = {
     },
   },
 };
-
-// Capability lookup that tolerates a model typed by hand: a model the catalog
-// doesn't list still works, it just falls back to the provider's defaults.
-export function modelCaps(provider, modelId) {
-  const known = provider.models.find((m) => m.id === modelId);
-  return known ? { temperature: known.temperature, thinking: known.thinking } : provider.defaultCaps;
-}
-
-// What the browser is allowed to know: the catalog, plus whether a key exists.
-// Never the key itself.
-export function describeProviders(env) {
-  return Object.entries(PROVIDERS).map(([id, provider]) => ({
-    id,
-    label: provider.label,
-    configured: Boolean(env[provider.keyVar]),
-    keyVar: provider.keyVar,
-    models: provider.models,
-    defaultCaps: provider.defaultCaps,
-  }));
-}
