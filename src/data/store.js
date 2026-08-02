@@ -13,6 +13,8 @@ const DEFAULT_SETTINGS = {
   maxTokens: 32000,
   // Off by default: enabling it lets the model fetch arbitrary public URLs.
   tools: false,
+  // Spike: the two-way transport, which can prompt before a destructive tool.
+  socket: false,
 };
 
 const state = {

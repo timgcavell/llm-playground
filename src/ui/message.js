@@ -12,6 +12,7 @@ const ROLE_LABELS = {
 };
 
 const TOOL_STATES = {
+  awaiting: "needs approval",
   running: "running…",
   ok: "done",
   error: "failed",
@@ -35,16 +36,56 @@ function renderTool(tool) {
   state.textContent = TOOL_STATES[tool.status] ?? tool.status;
   summary.append(name, target, state);
 
+  const approval = document.createElement("div");
+  approval.className = "approval";
+  approval.hidden = true;
+
   const output = document.createElement("div");
   output.className = "output";
   output.textContent = tool.content || "";
   output.hidden = !tool.content;
 
-  el.append(summary, output);
+  el.append(summary, approval, output);
 
   return {
     el,
+    // Only reachable on the socket transport, which can carry the answer back.
+    ask(onDecide) {
+      tool.status = "awaiting";
+      el.className = "tool awaiting";
+      el.open = true; // the buttons are inside the details; don't hide them
+      state.textContent = TOOL_STATES.awaiting;
+
+      const question = document.createElement("span");
+      question.textContent = "Run this?";
+
+      const decide = (approved) => {
+        approval.hidden = true;
+        approval.replaceChildren();
+        tool.status = approved ? "running" : "error";
+        el.className = `tool ${tool.status}`;
+        state.textContent = approved ? TOOL_STATES.running : "declined";
+        onDecide(approved);
+      };
+
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.className = "btn";
+      yes.textContent = "Approve";
+      yes.addEventListener("click", () => decide(true));
+
+      const no = document.createElement("button");
+      no.type = "button";
+      no.className = "btn btn-danger";
+      no.textContent = "Deny";
+      no.addEventListener("click", () => decide(false));
+
+      approval.replaceChildren(question, yes, no);
+      approval.hidden = false;
+    },
     resolve(update) {
+      approval.hidden = true;
+      approval.replaceChildren();
       Object.assign(tool, update);
       el.className = `tool ${tool.status}`;
       state.textContent = TOOL_STATES[tool.status] ?? tool.status;
@@ -125,10 +166,13 @@ export function renderMessage(message) {
       if (!handle) return;
       handle.resolve({ status: ok ? "ok" : "error", content, summary: label });
     },
+    askApproval(id, onDecide) {
+      toolHandles.get(id)?.ask(onDecide);
+    },
     // A response that is cut off mid-tool leaves rows spinning forever.
     settleTools() {
       for (const tool of message.tools ?? []) {
-        if (tool.status !== "running") continue;
+        if (tool.status !== "running" && tool.status !== "awaiting") continue;
         toolHandles.get(tool.id)?.resolve({ status: "error", content: tool.content || "" });
       }
     },

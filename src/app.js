@@ -4,7 +4,7 @@
 // turn posts the whole conversation to /api/chat and reads back a normalized
 // event stream, so this file never knows which vendor answered.
 
-import { readEvents } from "./lib/sse.js";
+import { openHttp, openSocket } from "./lib/transport.js";
 import { capsFor, defaultProvider, getProvider, loadCatalog, providers, tools } from "./data/catalog.js";
 import {
   addMessage,
@@ -35,6 +35,7 @@ const el = {
   maxTokens: document.getElementById("max-tokens"),
   toolsEnabled: document.getElementById("tools-enabled"),
   toolsNote: document.getElementById("tools-note"),
+  useSocket: document.getElementById("use-socket"),
   thread: document.getElementById("thread"),
   scroller: document.querySelector("main"),
   composer: document.getElementById("composer"),
@@ -162,6 +163,7 @@ function applySettingsToControls() {
   el.temperatureValue.textContent = Number(config.temperature).toFixed(2);
   el.maxTokens.value = config.maxTokens;
   el.toolsEnabled.checked = Boolean(config.tools);
+  el.useSocket.checked = Boolean(config.socket);
 }
 
 function describeTools() {
@@ -210,26 +212,20 @@ async function send(text) {
   setStatus(`Streaming from ${getProvider(el.provider.value)?.label ?? el.provider.value}…`);
 
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        provider: el.provider.value,
-        model,
-        system: el.system.value.trim(),
-        temperature: Number(el.temperature.value),
-        maxTokens: Number(el.maxTokens.value),
-        tools: el.toolsEnabled.checked,
-        // The assistant turn in progress is empty, so it is filtered out here.
-        messages: turnsForRequest(),
-      }),
-      signal: inFlight.signal,
-    });
+    const body = {
+      provider: el.provider.value,
+      model,
+      system: el.system.value.trim(),
+      temperature: Number(el.temperature.value),
+      maxTokens: Number(el.maxTokens.value),
+      tools: el.toolsEnabled.checked,
+      // The assistant turn in progress is empty, so it is filtered out here.
+      messages: turnsForRequest(),
+    };
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error([body.error, body.details].filter(Boolean).join(" — ") || `HTTP ${response.status}`);
-    }
+    const transport = el.useSocket.checked
+      ? await openSocket(body, inFlight.signal)
+      : await openHttp(body, inFlight.signal);
 
     let streamError = null;
     // A turn with tool calls spans several upstream calls. Within one call the
@@ -245,12 +241,19 @@ async function send(text) {
       return total;
     };
 
-    for await (const event of readEvents(response)) {
+    for await (const event of transport.events) {
       const stick = nearBottom();
       if (event.type === "text") handle.appendText(event.text);
       else if (event.type === "thinking") handle.appendThinking(event.text);
       else if (event.type === "tool_call") {
         handle.addTool(event);
+      } else if (event.type === "approval_request") {
+        // The turn is paused server-side until this answer goes back.
+        setStatus(`Waiting for you to approve ${event.name}…`);
+        handle.askApproval(event.id, (approved) => {
+          transport.respond(event.id, approved);
+          setStatus(approved ? "Running…" : "Declined.");
+        });
       } else if (event.type === "tool_result") {
         handle.resolveTool(event);
       } else if (event.type === "meta") {
@@ -345,6 +348,8 @@ el.maxTokens.addEventListener("change", () =>
 el.toolsEnabled.addEventListener("change", () =>
   updateSettings({ tools: el.toolsEnabled.checked })
 );
+
+el.useSocket.addEventListener("change", () => updateSettings({ socket: el.useSocket.checked }));
 
 el.stop.addEventListener("click", () => inFlight?.abort());
 

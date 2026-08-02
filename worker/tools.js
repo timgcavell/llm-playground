@@ -564,6 +564,8 @@ const TOOLS = {
 
   delete_memory: {
     available: (context) => Boolean(context.memory),
+    // Irreversible, so ask first where the transport can carry an answer.
+    needsApproval: true,
     describe: () => ({
       description:
         "Delete the text stored under one key. This cannot be undone, and it takes a " +
@@ -585,6 +587,13 @@ export function availableTools(context) {
   return Object.entries(TOOLS)
     .filter(([, tool]) => tool.available(context))
     .map(([name, tool]) => ({ name, ...tool.describe(context) }));
+}
+
+// Whether a tool should be confirmed before it runs. Only meaningful on a
+// transport that can carry an answer back mid-turn; the SSE path has no way
+// to ask, so it runs these tools directly.
+export function toolNeedsApproval(name) {
+  return Boolean(TOOLS[name]?.needsApproval);
 }
 
 export async function runTool(name, input, context) {

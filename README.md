@@ -177,6 +177,42 @@ the tool result is prefixed with a note saying so. Treat that as mitigation,
 not a guarantee: a page that tells the model to fetch something else may well
 get it to try.
 
+## Transports
+
+Two ways to run a turn, chosen by a checkbox in the settings panel. Both carry
+the same normalized events, because the agent loop writes everything through a
+single `emit` callback and never learns what it points at.
+
+| | `/api/chat` (default) | `/api/socket` (spike) |
+| --- | --- | --- |
+| Shape | POST, then a one-way SSE response | WebSocket |
+| Can ask mid-turn | no | yes |
+| Destructive tools | run directly | prompt for approval |
+
+The socket exists for one reason: a one-way response has nowhere for the
+browser to answer a question, so the Worker cannot pause before a destructive
+tool. Over the socket it can — `delete_memory` renders Approve/Deny in the
+transcript and the turn blocks until you answer. A denial comes back to the
+model as a tool result saying you declined, so it can respond sensibly instead
+of assuming success. A closed socket or an unanswered prompt resolves as a
+refusal: failing closed is the right default for something only being confirmed
+because it's destructive.
+
+Two things about this are unfinished:
+
+- **It is a plain Worker, not a Durable Object.** Cloudflare's guidance is that
+  server-side WebSockets belong in a DO, since a Worker is stateless with no
+  guaranteed lifetime, which makes a long-lived socket best-effort. For one
+  browser holding one socket for one turn this appears to work, and the point
+  of the spike was to find out whether the rest of the design held up before
+  taking on that machinery. It does; the DO question is still open.
+- **Access has not been tested in front of it.** Locally there is no Access in
+  the path, so the handshake proves nothing about production. The upgrade
+  should pass — it is an HTTP request and the browser sends the
+  `CF_Authorization` cookie on a same-origin upgrade, which `authenticate()`
+  already reads — but that is reasoning, not evidence. Check it before relying
+  on the socket path from the deployed app.
+
 ## State
 
 The conversation and the settings live in `localStorage`; the Worker is

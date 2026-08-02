@@ -1,6 +1,7 @@
 import { authenticate } from "./worker/access.js";
 import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
+import { handleSocket, isUpgrade } from "./worker/socket.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
 import { availableTools } from "./worker/tools.js";
 
@@ -123,6 +124,31 @@ function validateChatRequest(body) {
   };
 }
 
+// Validate a chat body and run one turn, whatever the transport. Returns an
+// error string if the request never got as far as starting.
+async function startTurn({ body, env, identity, url, emit, approve, signal }) {
+  const parsed = validateChatRequest(body);
+  if (typeof parsed === "string") return parsed;
+
+  const key = env[parsed.provider.keyVar];
+  if (!key) {
+    return `${parsed.provider.label} has no API key configured. Set it with: wrangler secret put ${parsed.provider.keyVar}`;
+  }
+
+  await runAgent(
+    {
+      ...parsed,
+      key,
+      caps: modelCaps(parsed.provider, parsed.model),
+      signal,
+      approve,
+      toolContext: buildToolContext(env, url, identity.email),
+    },
+    emit
+  );
+  return null;
+}
+
 async function handleChat(request, env, identity) {
   if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
@@ -133,20 +159,6 @@ async function handleChat(request, env, identity) {
     return jsonResponse({ error: "Invalid JSON" }, 400);
   }
 
-  const parsed = validateChatRequest(body);
-  if (typeof parsed === "string") return jsonResponse({ error: parsed }, 400);
-
-  const key = env[parsed.provider.keyVar];
-  if (!key) {
-    return jsonResponse(
-      {
-        error: `${parsed.provider.label} has no API key configured.`,
-        details: `Set it with: wrangler secret put ${parsed.provider.keyVar}`,
-      },
-      400
-    );
-  }
-
   const stream = createEventStream();
 
   // Not awaited: the response returns as soon as headers are ready, and the
@@ -155,16 +167,17 @@ async function handleChat(request, env, identity) {
   // status code, because the response has already begun.
   (async () => {
     try {
-      await runAgent(
-        {
-          ...parsed,
-          key,
-          caps: modelCaps(parsed.provider, parsed.model),
-          signal: request.signal,
-          toolContext: buildToolContext(env, new URL(request.url), identity.email),
-        },
-        stream.emit
-      );
+      // No approve hook here: this response only flows one way, so there is
+      // no way for the browser to answer a question mid-turn.
+      const problem = await startTurn({
+        body,
+        env,
+        identity,
+        url: new URL(request.url),
+        emit: stream.emit,
+        signal: request.signal,
+      });
+      if (problem) await stream.emit({ type: "error", message: problem });
     } catch (err) {
       if (err?.name !== "AbortError") {
         await stream.emit({ type: "error", message: `Request failed: ${err}` }).catch(() => {});
@@ -195,6 +208,16 @@ export default {
             description: tool.description,
           })),
         });
+      }
+
+      // Two-way transport, so tools that need confirmation can ask.
+      if (url.pathname === "/api/socket") {
+        if (!isUpgrade(request)) return jsonResponse({ error: "Expected a WebSocket upgrade" }, 426);
+        return handleSocket(request, ({ body, emit, approve, signal }) =>
+          startTurn({ body, env, identity, url, emit, approve, signal }).then((problem) => {
+            if (problem) emit({ type: "error", message: problem });
+          })
+        );
       }
 
       if (url.pathname === "/api/chat") {

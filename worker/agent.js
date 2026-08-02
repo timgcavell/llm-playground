@@ -11,7 +11,7 @@
 // tool blocks: one exchange in, one assistant reply out.
 
 import { consumeSse } from "./stream.js";
-import { availableTools, runTool, summarizeCall } from "./tools.js";
+import { availableTools, runTool, summarizeCall, toolNeedsApproval } from "./tools.js";
 
 // Rounds of tool use per message. Each round is another upstream call, so this
 // bounds both cost and latency for a single send.
@@ -30,7 +30,7 @@ async function upstreamError(response) {
 // One prompt, one answer, no tools and no history. This is what backs the
 // ask_model tool: the model being asked cannot call tools of its own, which is
 // also what stops two models from calling each other in a loop.
-export async function runOnce({ provider, key, model, caps, prompt, maxTokens }) {
+export async function runOnce({ provider, key, model, caps, prompt, maxTokens, signal }) {
   const { url, init } = provider.request({
     key,
     model,
@@ -43,7 +43,7 @@ export async function runOnce({ provider, key, model, caps, prompt, maxTokens })
     extraTurns: [],
   });
 
-  const upstream = await fetch(url, init);
+  const upstream = await fetch(url, { ...init, signal });
   if (!upstream.ok || !upstream.body) {
     return {
       ok: false,
@@ -76,7 +76,10 @@ export async function runAgent(request, emit) {
     const calls = [];
 
     const { url, init } = provider.request({ ...request, tools, extraTurns });
-    const upstream = await fetch(url, init);
+    // Carrying the signal is what makes Stop actually stop: without it the
+    // browser hangs up but the upstream request keeps running, and keeps
+    // being billed.
+    const upstream = await fetch(url, { ...init, signal: request.signal });
 
     if (!upstream.ok || !upstream.body) {
       await emit({
@@ -127,23 +130,30 @@ export async function runAgent(request, emit) {
     }
 
     // Independent calls in one turn, so run them together rather than serially.
+    // Each reports its own result as it lands, rather than when the whole batch
+    // settles — one call waiting on an approval shouldn't leave its finished
+    // siblings looking stuck.
     const results = await Promise.all(
       calls.map(async (call) => {
-        const { ok, content } = await runTool(call.name, call.input, request.toolContext);
-        return { id: call.id, name: call.name, ok, content };
+        const summary = summarizeCall(call.name, call.input);
+
+        // Destructive tools are held until the user answers — but only on a
+        // transport that can carry an answer. Without an approve hook the tool
+        // runs, which is why those tools are also narrow by design.
+        const declined =
+          request.approve &&
+          toolNeedsApproval(call.name) &&
+          !(await request.approve({ ...call, summary }));
+
+        const { ok, content } = declined
+          ? { ok: false, content: "The user declined to run this tool." }
+          : await runTool(call.name, call.input, request.toolContext);
+
+        const result = { id: call.id, name: call.name, ok, content };
+        await emit({ type: "tool_result", ...result, summary });
+        return result;
       })
     );
-
-    for (const result of results) {
-      await emit({
-        type: "tool_result",
-        id: result.id,
-        name: result.name,
-        ok: result.ok,
-        summary: summarizeCall(result.name, calls.find((c) => c.id === result.id)?.input),
-        content: result.content,
-      });
-    }
 
     extraTurns.push(...provider.assistantTurn(state), ...provider.resultTurn(results));
   }
