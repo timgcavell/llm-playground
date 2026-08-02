@@ -2,6 +2,10 @@ name = "llm-playground"
 main = "worker.js"
 compatibility_date = "2024-11-11"
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 # Custom Domain (not a plain route): Wrangler creates the proxied DNS record on
 # the timgcavell.com zone, which is required for Cloudflare Access to gate it.
 [[routes]]
