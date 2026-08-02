@@ -229,7 +229,7 @@ function consentPage(client, scopes, identity, params) {
             justify-self:start; }
   li span { font-size:.9rem; }
   li:has(input:not(:checked)) { opacity:.55; }
-  form { display:flex; gap:.5rem; margin-top:1.5rem; }
+  .actions { display:flex; gap:.5rem; margin-top:1.5rem; }
   button { font:inherit; font-size:.9rem; padding:.5rem 1rem; border-radius:3px;
            border:1px solid var(--border); background:var(--bg); color:var(--fg); cursor:pointer; }
   button.approve { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -243,8 +243,10 @@ function consentPage(client, scopes, identity, params) {
   <form method="POST" action="/oauth/authorize">
     <ul>${rows}</ul>
     ${hidden}
-    <button class="approve" type="submit" name="decision" value="approve">Approve</button>
-    <button class="deny" type="submit" name="decision" value="deny">Deny</button>
+    <div class="actions">
+      <button class="approve" type="submit" name="decision" value="approve">Approve</button>
+      <button class="deny" type="submit" name="decision" value="deny">Deny</button>
+    </div>
   </form>
   <p class="note">Untick anything you would rather not grant. A client is told what it
      actually received, and cannot widen it later without asking again.</p>
