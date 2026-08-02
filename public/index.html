@@ -8,30 +8,27 @@
        behind Cloudflare Access a cold-load request for a separate stylesheet
        can be redirected to the login page, flashing unstyled content. -->
   <style>
-    /* ---------- Design tokens ---------- */
+    /* ---------- Design tokens ----------
+       Taken from timgcavell.com so the two sit together: warm cream ground,
+       deep teal text, terracotta accent. That site is light-only, so this one
+       is too — a derived dark theme would be a guess at something that
+       doesn't exist rather than a match. */
     :root {
-      color-scheme: light dark;
-      --bg: #ffffff;
-      --fg: #1b1f24;
-      --muted: #57606a;
-      --border: #d0d7de;
-      --accent: #0969da;
-      --danger: #cf222e;
-      --card-bg: #f6f8fa;
-      --active-bg: #ddf0ff;
-    }
+      color-scheme: light;
+      --bg: #fdfbf5;
+      --fg: #0b4d47;
+      --accent: #c8621f;
+      --accent-text: #fff;
+      --link: #313435;
+      --code-fg: #360c97;
+      --code-bg: #dadfe0;
 
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0d1117;
-        --fg: #e6edf3;
-        --muted: #8b949e;
-        --border: #30363d;
-        --accent: #58a6ff;
-        --danger: #f85149;
-        --card-bg: #161b22;
-        --active-bg: #12233b;
-      }
+      /* Derived, for surfaces the personal site has no equivalent of. */
+      --muted: #6d827f;
+      --border: #ddd9cc;
+      --card-bg: #f7f4ea;
+      --user-bg: #f7ece2;
+      --danger: #9d2f2f;
     }
 
     /* ---------- Base ---------- */
@@ -42,7 +39,7 @@
       margin: 0;
       display: flex;
       flex-direction: column;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-family: Geneva, sans-serif;
       background: var(--bg);
       color: var(--fg);
     }
@@ -50,23 +47,39 @@
     [hidden] { display: none !important; }
     .muted { color: var(--muted); }
 
+    a {
+      color: var(--link);
+      text-decoration: none;
+      border-width: 0 0 1px;
+      border-style: dotted;
+    }
+
+    a:focus, a:hover { color: var(--accent); }
+
     /* ---------- Controls ---------- */
     .btn {
       padding: 0.45rem 0.8rem;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--card-bg);
+      border-radius: 3px;
+      background: var(--bg);
       color: var(--fg);
       font: inherit;
       font-size: 0.85rem;
-      font-weight: 600;
       cursor: pointer;
     }
 
-    .btn:hover:not(:disabled) { border-color: var(--accent); }
+    .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     .btn:disabled { opacity: 0.4; cursor: default; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-text);
+    }
+
+    .btn-primary:hover:not(:disabled) { color: var(--accent-text); opacity: 0.9; }
     .btn-danger { color: var(--danger); }
+    .btn-danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
 
     select, input, textarea {
       font: inherit;
@@ -74,8 +87,13 @@
       color: var(--fg);
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: 3px;
       padding: 0.4rem 0.5rem;
+    }
+
+    select:focus, input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
     }
 
     select:disabled, input:disabled { opacity: 0.5; }
@@ -87,103 +105,143 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 0.5rem;
-      padding: 0.7rem 1rem;
+      padding: 0.7rem 4%;
       border-bottom: 1px solid var(--border);
-      background: var(--card-bg);
     }
 
     .topbar h1 {
-      margin: 0 0.5rem 0 0;
-      font-size: 1rem;
-      letter-spacing: -0.01em;
+      margin: 0 0.6rem 0 0;
+      font-size: 1.05rem;
+      letter-spacing: 0.05em; /* h1 on the personal site */
+      font-weight: 700;
     }
 
     .topbar .spacer { flex: 1; }
     #custom-model { width: 14rem; }
 
+    /* Narrow screens wrap the bar mid-pair, stranding "Provider" beside the
+       previous control. Give the title its own line and hide the field labels
+       visually — the selects read fine alone, and `for=` keeps them announced. */
+    @media (max-width: 40em) {
+      .topbar h1 { flex: 1 1 100%; margin: 0 0 0.2rem; }
+      .topbar > label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .topbar select { flex: 1 1 auto; min-width: 0; }
+    }
+
     /* ---------- Settings ---------- */
     #settings {
       display: grid;
       gap: 0.9rem;
-      padding: 0.9rem 1rem;
+      /* Full-width band, but the controls stay on a bounded measure rather
+         than stretching a system-prompt box across a wide window. */
+      padding: 0.9rem max(4%, calc((100% - 60em) / 2));
       border-bottom: 1px solid var(--border);
       background: var(--card-bg);
     }
 
-    #settings label { display: block; font-size: 0.8rem; font-weight: 600; }
+    #settings label { display: block; font-size: 0.8rem; }
     #settings .field { display: grid; gap: 0.35rem; }
+    #settings .field > label:first-child { color: var(--accent); } /* h3 on the personal site */
     #settings .row { display: flex; flex-wrap: wrap; gap: 1.5rem; }
     #settings .note { margin: 0; font-size: 0.75rem; }
-    #temperature { vertical-align: middle; }
+    #temperature { vertical-align: middle; accent-color: var(--accent); }
+    input[type="checkbox"] { accent-color: var(--accent); }
 
     /* ---------- Messages ---------- */
     main {
       flex: 1;
       overflow-y: auto;
-      padding: 1rem;
+      padding: 1.5rem 4%;
     }
 
-    .thread { max-width: 52rem; margin: 0 auto; display: grid; gap: 1rem; }
+    /* 42em is the personal site's measure. */
+    .thread { max-width: 42em; margin: 0 auto; display: grid; gap: 1.2rem; }
 
     .message { display: grid; gap: 0.35rem; }
+
     .message .role {
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
-      color: var(--muted);
+      color: var(--accent);
     }
 
     .message .body {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      line-height: 1.55;
+      line-height: 1.5rem;
       padding: 0.7rem 0.85rem;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 3px;
       background: var(--card-bg);
     }
 
-    .message.user .body { background: var(--active-bg); border-color: var(--accent); }
+    .message.user .body { background: var(--user-bg); border-color: #e5cdb8; }
+    .message.error .role { color: var(--danger); }
     .message.error .body { border-color: var(--danger); color: var(--danger); }
 
     .message .thinking {
-      border: 1px dashed var(--border);
-      border-radius: 8px;
+      border: 1px dotted var(--border);
+      border-radius: 3px;
       padding: 0.4rem 0.7rem;
       font-size: 0.85rem;
       color: var(--muted);
     }
 
-    .message .thinking summary { cursor: pointer; font-weight: 600; }
+    .message .thinking summary { cursor: pointer; }
     .message .thinking .body {
       background: none;
       border: none;
       padding: 0.4rem 0 0;
       font-size: 0.85rem;
+      line-height: 1.4rem;
     }
 
     .message .meta { font-size: 0.72rem; color: var(--muted); }
+
+    .empty {
+      margin: 3rem auto;
+      max-width: 32rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5rem;
+    }
 
     /* ---------- Tool calls ---------- */
     .message .tools { display: grid; gap: 0.35rem; }
 
     .tool {
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 3px;
       padding: 0.35rem 0.7rem;
       background: var(--bg);
       font-size: 0.85rem;
     }
 
+    .tool.awaiting { border-color: var(--accent); }
     .tool.error { border-color: var(--danger); }
     .tool summary { cursor: pointer; }
-    .tool .name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .tool .target { color: var(--muted); overflow-wrap: anywhere; }
-    .tool .state { font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
-    .tool.error .state { color: var(--danger); }
 
-    .tool.awaiting { border-color: var(--accent); }
+    .tool .name {
+      color: var(--code-fg);
+      background: var(--code-bg);
+      padding: 0.1em 0.3em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem;
+    }
+
+    .tool .target { color: var(--muted); overflow-wrap: anywhere; }
+    .tool .state { font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+    .tool.awaiting .state { color: var(--accent); }
+    .tool.error .state { color: var(--danger); }
 
     .tool .approval {
       display: flex;
@@ -197,34 +255,27 @@
 
     .tool .output {
       margin-top: 0.4rem;
-      padding-top: 0.4rem;
+      padding: 0.5rem;
       border-top: 1px solid var(--border);
       max-height: 18rem;
       overflow: auto;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+      background: var(--code-bg);
+      color: var(--code-fg);
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.75rem;
-      line-height: 1.5;
-    }
-
-    .empty {
-      margin: 3rem auto;
-      max-width: 32rem;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.9rem;
+      line-height: 1.3rem;
     }
 
     /* ---------- Composer ---------- */
     footer {
       border-top: 1px solid var(--border);
-      background: var(--card-bg);
-      padding: 0.7rem 1rem;
+      padding: 0.7rem 4%;
     }
 
     #composer {
-      max-width: 52rem;
+      max-width: 42em;
       margin: 0 auto;
       display: flex;
       gap: 0.5rem;
@@ -232,7 +283,7 @@
     }
 
     #prompt { min-height: 3.2rem; max-height: 14rem; }
-    #status { max-width: 52rem; margin: 0.4rem auto 0; font-size: 0.75rem; min-height: 1rem; }
+    #status { max-width: 42em; margin: 0.4rem auto 0; font-size: 0.75rem; min-height: 1rem; }
     #status.error { color: var(--danger); }
   </style>
 </head>
