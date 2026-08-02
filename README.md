@@ -210,6 +210,32 @@ approval-gated on the socket transport, and the token's own scopes (a
 fine-grained PAT with Contents and Pull requests read/write, ideally limited to
 chosen repositories) bound the blast radius regardless of what the tools allow.
 
+## Evals
+
+`npm run eval` runs the fixed task set in `evals/cases.mjs` through
+`/api/chat` — the same surface the UI uses, so a pass means the whole stack
+worked: validation, the agent loop, the tools, the provider adapter. It needs
+`wrangler dev` running; keys stay in the Worker.
+
+Checks are deterministic where possible (`contains`, `tool_called`,
+`no_tools_called`, `tools_ok`) with an LLM judge only where a string match
+would be brittle. Judges are graded help, not oracles — the first run failed a
+correct answer because the judge, having no clock, decided the current date
+was "in the future". The judge prompt now says so. The same first run also
+caught a real failure: asked to try a blocked fetch, flash-lite skipped the
+call and fabricated having tried, which `tool_called` exists to catch.
+
+Results land in `evals/results/` (untracked) as JSON;
+`node evals/run.mjs compare old.json new.json` diffs two runs and reports
+regressions, for checking a prompt, model, or code change against the last
+known-good run. Both commands exit non-zero on failure, so they can gate CI.
+
+```bash
+npm run eval                                   # full set, default model
+node evals/run.mjs run --models a,b --filter fetch
+node evals/run.mjs compare results/old.json results/new.json
+```
+
 ## Transports
 
 Two ways to run a turn, chosen by a checkbox in the settings panel. Both carry

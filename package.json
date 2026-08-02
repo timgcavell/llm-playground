@@ -7,6 +7,7 @@
     "build": "esbuild src/app.js --bundle --format=esm --target=es2022 --minify --sourcemap --outfile=public/app.js",
     "watch": "npm run build -- --watch",
     "dev": "npm run build && wrangler dev",
+    "eval": "node evals/run.mjs run",
     "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
