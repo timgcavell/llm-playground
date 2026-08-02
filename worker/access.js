@@ -82,8 +82,12 @@ export async function authenticate(request, env) {
 
   try {
     const payload = await verifyAccessJwt(token, env.CF_ACCESS_TEAM_DOMAIN, env.CF_ACCESS_AUD);
-    if (!payload.email) return { error: "Unauthorized", status: 401 };
-    return { email: payload.email };
+    // A browser login carries an email claim; a service token (how a
+    // non-interactive client like an MCP client authenticates) carries its
+    // common_name instead. Either is an identity we can key state on.
+    const identity = payload.email || payload.common_name;
+    if (!identity) return { error: "Unauthorized", status: 401 };
+    return { email: identity };
   } catch {
     return { error: "Unauthorized", status: 401 };
   }

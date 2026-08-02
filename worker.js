@@ -1,6 +1,7 @@
 import { authenticate } from "./worker/access.js";
 import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
+import { handleMcp } from "./worker/mcp.js";
 import { handleSocket, isUpgrade } from "./worker/socket.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
 import { CREDENTIALS, availableTools } from "./worker/tools.js";
@@ -220,6 +221,11 @@ export default {
             description: tool.description,
           })),
         });
+      }
+
+      // The tool registry as an MCP server, for external MCP clients.
+      if (url.pathname === "/api/mcp") {
+        return handleMcp(request, buildToolContext(env, url, identity.email));
       }
 
       // Two-way transport, so tools that need confirmation can ask.

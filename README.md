@@ -236,6 +236,42 @@ node evals/run.mjs run --models a,b --filter fetch
 node evals/run.mjs compare results/old.json results/new.json
 ```
 
+## MCP server
+
+The tool registry is also exposed as a Model Context Protocol server at
+`/api/mcp`, so external MCP clients — Claude Code, Claude Desktop, anything
+speaking the protocol — can use these tools directly. `worker/mcp.js`
+implements the stateless shape of the Streamable HTTP transport by hand
+(JSON-RPC 2.0 over POST; no sessions, no server stream — both optional per
+spec): `initialize`, `tools/list`, `tools/call`, `ping`. The registry already
+had everything MCP wants, so the file is a wire format, not new capability.
+
+An unavailable tool is a protocol error (`-32602`); a tool that ran and
+refused is a successful call whose result carries `isError` — clients treat
+the two differently. There is no human in the loop on this path, so
+approval-gated tools behave as on SSE: they run, and stay narrow by design.
+
+Locally (`wrangler dev`, stub identity):
+
+```bash
+claude mcp add --transport http playground http://localhost:8787/api/mcp
+```
+
+The deployed endpoint sits behind Cloudflare Access, which a non-interactive
+client satisfies with a [service token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)
+rather than a browser login. Create one in Zero Trust, allow it in the Access
+app's policy, and pass its headers:
+
+```bash
+claude mcp add --transport http playground https://llm.timgcavell.com/api/mcp \
+  --header "CF-Access-Client-Id: <id>.access" \
+  --header "CF-Access-Client-Secret: <secret>"
+```
+
+Service-token JWTs carry a `common_name` claim instead of `email`;
+`authenticate()` accepts either, so a token gets its own memory namespace the
+way a person does.
+
 ## Transports
 
 Two ways to run a turn, chosen by a checkbox in the settings panel. Both carry
