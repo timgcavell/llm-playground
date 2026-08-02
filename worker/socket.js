@@ -46,14 +46,22 @@ export function handleSocket(request, startTurn) {
 
   // Asks the browser and blocks the agent loop until it answers. A socket that
   // closes, or a user who wanders off, resolves as a refusal rather than
-  // hanging the turn open — failing closed is the right default for a tool
-  // that only needs approval because it is destructive.
-  const approve = (call) =>
+  // hanging the turn open — failing closed is the right default for questions
+  // that are only asked because the alternative is worse.
+  const ask = (id, event) =>
     new Promise((resolve) => {
-      pending.set(call.id, resolve);
-      send({ type: "approval_request", id: call.id, name: call.name, summary: call.summary });
-      setTimeout(() => settle(call.id, false), APPROVAL_TIMEOUT_MS);
+      pending.set(id, resolve);
+      send(event);
+      setTimeout(() => settle(id, false), APPROVAL_TIMEOUT_MS);
     });
+
+  const approve = (call) =>
+    ask(call.id, { type: "approval_request", id: call.id, name: call.name, summary: call.summary });
+
+  const askContinue = ({ rounds }) => {
+    const id = crypto.randomUUID();
+    return ask(id, { type: "continue_request", id, rounds });
+  };
 
   server.addEventListener("message", (event) => {
     let message;
@@ -83,7 +91,13 @@ export function handleSocket(request, startTurn) {
     // approvals and cancels — can still be delivered while the turn runs.
     (async () => {
       try {
-        await startTurn({ body: message.body, emit: send, approve, signal: controller.signal });
+        await startTurn({
+          body: message.body,
+          emit: send,
+          approve,
+          askContinue,
+          signal: controller.signal,
+        });
       } catch (err) {
         if (err?.name !== "AbortError") send({ type: "error", message: `Request failed: ${err}` });
       } finally {

@@ -254,6 +254,12 @@ async function send(text) {
           transport.respond(event.id, approved);
           setStatus(approved ? "Running…" : "Declined.");
         });
+      } else if (event.type === "continue_request") {
+        setStatus("Waiting for you — continue tool calls?");
+        handle.askContinue(event.rounds, (approved) => {
+          transport.respond(event.id, approved);
+          setStatus(approved ? "Continuing…" : "Stopping.");
+        });
       } else if (event.type === "tool_result") {
         handle.resolveTool(event);
       } else if (event.type === "meta") {

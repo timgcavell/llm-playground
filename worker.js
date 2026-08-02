@@ -137,7 +137,7 @@ function validateChatRequest(body) {
 
 // Validate a chat body and run one turn, whatever the transport. Returns an
 // error string if the request never got as far as starting.
-async function startTurn({ body, env, identity, url, emit, approve, signal }) {
+async function startTurn({ body, env, identity, url, emit, approve, askContinue, signal }) {
   const parsed = validateChatRequest(body);
   if (typeof parsed === "string") return parsed;
 
@@ -153,6 +153,7 @@ async function startTurn({ body, env, identity, url, emit, approve, signal }) {
       caps: modelCaps(parsed.provider, parsed.model),
       signal,
       approve,
+      askContinue,
       toolContext: buildToolContext(env, url, identity.email),
     },
     emit
@@ -224,10 +225,12 @@ export default {
       // Two-way transport, so tools that need confirmation can ask.
       if (url.pathname === "/api/socket") {
         if (!isUpgrade(request)) return jsonResponse({ error: "Expected a WebSocket upgrade" }, 426);
-        return handleSocket(request, ({ body, emit, approve, signal }) =>
-          startTurn({ body, env, identity, url, emit, approve, signal }).then((problem) => {
-            if (problem) emit({ type: "error", message: problem });
-          })
+        return handleSocket(request, ({ body, emit, approve, askContinue, signal }) =>
+          startTurn({ body, env, identity, url, emit, approve, askContinue, signal }).then(
+            (problem) => {
+              if (problem) emit({ type: "error", message: problem });
+            }
+          )
         );
       }
 

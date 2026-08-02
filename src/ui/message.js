@@ -169,6 +169,39 @@ export function renderMessage(message) {
     askApproval(id, onDecide) {
       toolHandles.get(id)?.ask(onDecide);
     },
+    // The round-budget question. Rendered as a row among the tools, since
+    // that's what it is about; it removes itself once answered.
+    askContinue(rounds, onDecide) {
+      const row = document.createElement("div");
+      row.className = "tool awaiting";
+
+      const wrap = document.createElement("div");
+      wrap.className = "approval";
+      const question = document.createElement("span");
+      question.textContent = `${rounds} rounds of tool calls used — keep going?`;
+
+      const decide = (approved) => {
+        row.remove();
+        onDecide(approved);
+      };
+
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.className = "btn";
+      yes.textContent = "Continue";
+      yes.addEventListener("click", () => decide(true));
+
+      const no = document.createElement("button");
+      no.type = "button";
+      no.className = "btn btn-danger";
+      no.textContent = "Stop";
+      no.addEventListener("click", () => decide(false));
+
+      wrap.append(question, yes, no);
+      row.append(wrap);
+      tools.append(row);
+      row.scrollIntoView({ block: "nearest" });
+    },
     // A response that is cut off mid-tool leaves rows spinning forever.
     settleTools() {
       for (const tool of message.tools ?? []) {

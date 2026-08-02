@@ -14,7 +14,9 @@ import { consumeSse } from "./stream.js";
 import { availableTools, runTool, summarizeCall, toolNeedsApproval } from "./tools.js";
 
 // Rounds of tool use per message. Each round is another upstream call, so this
-// bounds both cost and latency for a single send.
+// bounds both cost and latency for a single send. On a transport that can ask,
+// exhausting the budget offers to continue, granting another batch; elsewhere
+// it just stops.
 const MAX_TOOL_ROUNDS = 5;
 
 async function upstreamError(response) {
@@ -70,6 +72,7 @@ export async function runAgent(request, emit) {
   const { provider, useTools } = request;
   const tools = useTools ? availableTools(request.toolContext) : null;
   const extraTurns = [];
+  let budget = MAX_TOOL_ROUNDS;
 
   for (let round = 0; ; round++) {
     const state = {};
@@ -121,12 +124,19 @@ export async function runAgent(request, emit) {
     // No tool calls means the model is done talking.
     if (calls.length === 0) return;
 
-    if (round >= MAX_TOOL_ROUNDS - 1) {
-      await emit({
-        type: "error",
-        message: `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`,
-      });
-      return;
+    if (round >= budget - 1) {
+      // The model wants more rounds than the budget allows. Where the
+      // transport can carry an answer, ask; a decline (or no way to ask)
+      // ends the turn with these calls unrun.
+      const more = request.askContinue ? await request.askContinue({ rounds: budget }) : false;
+      if (!more) {
+        await emit({
+          type: "error",
+          message: `Stopped after ${budget} rounds of tool calls.`,
+        });
+        return;
+      }
+      budget += MAX_TOOL_ROUNDS;
     }
 
     // Independent calls in one turn, so run them together rather than serially.

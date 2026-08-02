@@ -140,7 +140,9 @@ replaced rather than succeeding silently.
 
 With tools enabled a send becomes a loop in `worker/agent.js`: stream a turn,
 run whatever tools the model asked for, hand the results back, stream the next
-turn, up to five rounds. The browser sees one continuous event stream either
+turn. The budget is five rounds; on the socket transport exhausting it asks
+whether to continue and each yes grants five more, while on SSE — which cannot
+ask — the turn just stops there. The browser sees one continuous event stream either
 way, so a tool call is a rendering detail rather than a protocol change. Tool
 calls appear in the transcript as collapsed rows that expand to the exact text
 the model was given.
