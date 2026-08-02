@@ -24,7 +24,7 @@ function jsonResponse(body, status = 200) {
 // Everything the tools are allowed to see. Built here rather than handing
 // tools.js the whole env, so the only secrets that reach a tool are the ones
 // it needs, and ask_model gets a narrow callback instead of the key ring.
-function buildToolContext(env, url) {
+function buildToolContext(env, url, owner) {
   const search = env.BRAVE_SEARCH_API_KEY
     ? { kind: "brave", key: env.BRAVE_SEARCH_API_KEY }
     : env.TAVILY_API_KEY
@@ -38,6 +38,9 @@ function buildToolContext(env, url) {
   return {
     selfHost: url ? url.hostname : null,
     search,
+    // Notes are keyed by the Access identity, so the memory tools are only
+    // available once we know who is asking.
+    memory: env.MEMORY && owner ? { kv: env.MEMORY, owner } : null,
     askableProviders: askable,
     askModel: askable.length
       ? async ({ provider: id, model, prompt, maxTokens }) => {
@@ -120,7 +123,7 @@ function validateChatRequest(body) {
   };
 }
 
-async function handleChat(request, env) {
+async function handleChat(request, env, identity) {
   if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
   let body;
@@ -158,7 +161,7 @@ async function handleChat(request, env) {
           key,
           caps: modelCaps(parsed.provider, parsed.model),
           signal: request.signal,
-          toolContext: buildToolContext(env, new URL(request.url)),
+          toolContext: buildToolContext(env, new URL(request.url), identity.email),
         },
         stream.emit
       );
@@ -187,7 +190,7 @@ export default {
         return jsonResponse({
           email: identity.email,
           providers: describeProviders(env),
-          tools: availableTools(buildToolContext(env, url)).map((tool) => ({
+          tools: availableTools(buildToolContext(env, url, identity.email)).map((tool) => ({
             name: tool.name,
             description: tool.description,
           })),
@@ -196,7 +199,7 @@ export default {
 
       if (url.pathname === "/api/chat") {
         try {
-          return await handleChat(request, env);
+          return await handleChat(request, env, identity);
         } catch (err) {
           return jsonResponse({ error: "Chat request failed", details: String(err) }, 502);
         }

@@ -40,7 +40,7 @@ export const PROVIDERS = {
       { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", temperature: true, thinking: false },
     ],
 
-    request({ key, model, caps, system, messages, temperature, maxTokens, tools, extraTurns }) {
+    request({ key, model, caps, system, messages, temperature, maxTokens, tools = null, extraTurns = [] }) {
       const body = {
         model,
         max_tokens: maxTokens,
@@ -182,7 +182,7 @@ export const PROVIDERS = {
       },
     ],
 
-    request({ key, model, caps, system, messages, temperature, maxTokens, tools, extraTurns }) {
+    request({ key, model, caps, system, messages, temperature, maxTokens, tools = null, extraTurns = [] }) {
       const body = {
         contents: [
           ...messages.map((m) => ({
@@ -297,7 +297,7 @@ export const PROVIDERS = {
       { id: "o4-mini", label: "o4-mini", temperature: false, thinking: false },
     ],
 
-    request({ key, model, caps, system, messages, temperature, maxTokens, tools, extraTurns }) {
+    request({ key, model, caps, system, messages, temperature, maxTokens, tools = null, extraTurns = [] }) {
       const body = {
         model,
         stream: true,

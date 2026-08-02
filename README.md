@@ -115,6 +115,7 @@ Tools are off by default; the settings panel turns them on.
 | `web_search` | Top results as title/URL/snippet. Pairs with `fetch_url`: search, pick, read. | `BRAVE_SEARCH_API_KEY` or `TAVILY_API_KEY` |
 | `get_current_time` | The current date and time, optionally in an IANA zone. | — |
 | `ask_model` | Puts a one-off question to a different model and returns its answer. | a second provider key |
+| `save_memory` / `read_memory` / `list_memories` / `delete_memory` | Notes that persist across conversations, in Workers KV. | the `MEMORY` KV binding |
 
 Availability follows configuration, the same way providers do: a tool whose
 backing key is missing is never offered to the model, rather than being offered
@@ -123,6 +124,18 @@ and always failing. With no search key, `web_search` simply isn't in the list.
 `ask_model` reuses the provider adapters for a single prompt with no history
 and no tools of its own — which is also what stops two models calling each
 other in a loop.
+
+The memory tools are the first with side effects. Keys are namespaced by the
+Cloudflare Access email (`mem:<email>:<key>`), so one person's notes are
+unreachable from another's session even though they share a namespace — the
+scheme the jobs app uses for tracked jobs. `:` is excluded from keys, so the
+owner prefix cannot be forged from the key side.
+
+Deletion is the sharp edge, because the confirmation gap above is still open:
+there is nowhere for the browser to approve an action mid-stream. So
+`delete_memory` takes one exact key with no prefix or wildcard form — the model
+cannot clear the store in a single call — and an overwrite reports what it
+replaced rather than succeeding silently.
 
 With tools enabled a send becomes a loop in `worker/agent.js`: stream a turn,
 run whatever tools the model asked for, hand the results back, stream the next

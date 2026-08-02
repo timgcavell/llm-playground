@@ -14,6 +14,10 @@ const TIMEOUT_MS = 15_000;
 const SEARCH_RESULTS = 6;
 const ASK_MODEL_TOKENS = 2000;
 
+const MAX_KEY_CHARS = 128;
+const MAX_VALUE_CHARS = 8_000;
+const MAX_KEYS_LISTED = 100;
+
 // Prefixed to anything fetched from the open web. The model is about to read
 // text written by someone else; say so, so that instructions embedded in a
 // page are treated as content rather than as orders from the user.
@@ -323,6 +327,97 @@ async function askModel(input, context) {
   });
 }
 
+// ---------- Memory (Workers KV) ----------
+//
+// The first tools here with side effects. Two things follow from that.
+//
+// Keys are namespaced by the Cloudflare Access email, so one person's notes
+// are unreachable from another's session even though they share a namespace —
+// the same scheme the jobs app uses for tracked jobs.
+//
+// And deletion is irreversible with no way to ask first: /api/chat streams a
+// whole turn in one request, so there is nowhere for the browser to answer a
+// confirmation prompt mid-stream. delete_memory is therefore deliberately
+// narrow — one exact key, no prefix or wildcard form — so the model cannot
+// clear the store in a single call.
+
+function storageKey(owner, key) {
+  return `mem:${owner}:${key}`;
+}
+
+// Keys end up in a URL-ish namespace and are echoed back to the model, so keep
+// them to something predictable rather than accepting arbitrary text.
+function normalizeKey(raw) {
+  const key = typeof raw === "string" ? raw.trim() : "";
+  if (!key || key.length > MAX_KEY_CHARS) return null;
+  return /^[A-Za-z0-9 ._\-/]+$/.test(key) ? key : null;
+}
+
+const KEY_RULE =
+  `Keys may contain letters, numbers, spaces, and . _ - / and be at most ${MAX_KEY_CHARS} characters.`;
+
+async function saveMemory(input, context) {
+  const key = normalizeKey(input?.key);
+  if (!key) return { ok: false, content: `Refused: invalid key. ${KEY_RULE}` };
+
+  const value = typeof input?.value === "string" ? input.value : "";
+  if (!value.trim()) return { ok: false, content: "Refused: no value was provided." };
+  if (value.length > MAX_VALUE_CHARS) {
+    return { ok: false, content: `Refused: values are limited to ${MAX_VALUE_CHARS} characters.` };
+  }
+
+  const existing = await context.memory.kv.get(storageKey(context.memory.owner, key));
+  await context.memory.kv.put(storageKey(context.memory.owner, key), value, {
+    metadata: { savedAt: new Date().toISOString() },
+  });
+
+  // Say plainly when a write replaced something, so an accidental overwrite is
+  // visible in the transcript rather than silent.
+  return {
+    ok: true,
+    content: existing
+      ? `Replaced "${key}" (was ${existing.length} characters, now ${value.length}).`
+      : `Saved "${key}" (${value.length} characters).`,
+  };
+}
+
+async function readMemory(input, context) {
+  const key = normalizeKey(input?.key);
+  if (!key) return { ok: false, content: `Refused: invalid key. ${KEY_RULE}` };
+
+  const value = await context.memory.kv.get(storageKey(context.memory.owner, key));
+  if (value === null) {
+    // Not an error: "nothing stored" is a legitimate answer to look up.
+    return { ok: true, content: `Nothing is stored under "${key}".` };
+  }
+  return { ok: true, content: `${key}:\n\n${value}` };
+}
+
+async function listMemories(_input, context) {
+  const prefix = storageKey(context.memory.owner, "");
+  const listing = await context.memory.kv.list({ prefix, limit: MAX_KEYS_LISTED });
+
+  if (listing.keys.length === 0) return { ok: true, content: "Nothing is stored yet." };
+
+  const lines = listing.keys.map((entry) => {
+    const savedAt = entry.metadata?.savedAt;
+    return `- ${entry.name.slice(prefix.length)}${savedAt ? ` (saved ${savedAt})` : ""}`;
+  });
+  const more = listing.list_complete === false ? `\n\n[showing the first ${MAX_KEYS_LISTED}]` : "";
+  return { ok: true, content: `Stored keys:\n${lines.join("\n")}${more}` };
+}
+
+async function deleteMemory(input, context) {
+  const key = normalizeKey(input?.key);
+  if (!key) return { ok: false, content: `Refused: invalid key. ${KEY_RULE}` };
+
+  const existing = await context.memory.kv.get(storageKey(context.memory.owner, key));
+  if (existing === null) return { ok: true, content: `Nothing was stored under "${key}".` };
+
+  await context.memory.kv.delete(storageKey(context.memory.owner, key));
+  return { ok: true, content: `Deleted "${key}" (${existing.length} characters).` };
+}
+
 // ---------- Registry ----------
 
 const TOOLS = {
@@ -419,6 +514,68 @@ const TOOLS = {
     }),
     run: askModel,
     summarize: (input) => `${input?.provider ?? "?"}${input?.model ? `/${input.model}` : ""}`,
+  },
+
+  save_memory: {
+    available: (context) => Boolean(context.memory),
+    describe: () => ({
+      description:
+        "Store a piece of text under a key so it can be read back in a later conversation. " +
+        "Use it for things worth remembering across sessions, such as preferences or notes. " +
+        "Saving to a key that already exists replaces its contents.",
+      schema: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: `A short name for this note. ${KEY_RULE}` },
+          value: { type: "string", description: "The text to store." },
+        },
+        required: ["key", "value"],
+      },
+    }),
+    run: saveMemory,
+    summarize: (input) => String(input?.key ?? ""),
+  },
+
+  read_memory: {
+    available: (context) => Boolean(context.memory),
+    describe: () => ({
+      description:
+        "Read back the text stored under a key. Use list_memories first if you do not " +
+        "already know the key.",
+      schema: {
+        type: "object",
+        properties: { key: { type: "string", description: "The key to read." } },
+        required: ["key"],
+      },
+    }),
+    run: readMemory,
+    summarize: (input) => String(input?.key ?? ""),
+  },
+
+  list_memories: {
+    available: (context) => Boolean(context.memory),
+    describe: () => ({
+      description: "List the keys that currently have something stored under them.",
+      schema: { type: "object", properties: {}, required: [] },
+    }),
+    run: listMemories,
+    summarize: () => "",
+  },
+
+  delete_memory: {
+    available: (context) => Boolean(context.memory),
+    describe: () => ({
+      description:
+        "Delete the text stored under one key. This cannot be undone, and it takes a " +
+        "single exact key — there is no way to delete several at once.",
+      schema: {
+        type: "object",
+        properties: { key: { type: "string", description: "The exact key to delete." } },
+        required: ["key"],
+      },
+    }),
+    run: deleteMemory,
+    summarize: (input) => String(input?.key ?? ""),
   },
 };
 
