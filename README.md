@@ -298,6 +298,13 @@ from `tools/list` and unknown to `tools/call`, since enumerating what a client
 can't have tells it nothing useful. An Access session carries no scopes and
 sees everything: it is the account holder, not a delegate.
 
+The consent screen lists each requested scope as its own checkbox, so a grant
+can be narrower than the request — "all of this or nothing" is not really a
+choice. The client is told what it actually received in the token response's
+`scope`. Ticking is filtered against what was requested, so a tampered form
+cannot grant a scope the client never asked for, and approving with nothing
+ticked is treated as a refusal rather than as a token that can do nothing.
+
 Choices worth knowing, since they are what the exercise was for:
 
 - **PKCE S256 required, no client secrets.** A secret a desktop client keeps in

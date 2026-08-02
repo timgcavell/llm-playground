@@ -173,17 +173,22 @@ function escapeHtml(value) {
 
 // The consent screen. The scope list is the whole point: it names what is
 // being handed over in words that mean something, rather than asking for
-// blanket access to "your tools".
+// blanket access to "your tools" — and each one can be declined on its own,
+// because "all of this or nothing" is not really a choice. A client asks for
+// what it would like; the person decides what it gets.
 function consentPage(client, scopes, identity, params) {
   const rows = scopes
     .map(
       (scope) =>
-        `<li><code>${escapeHtml(scope)}</code><span>${escapeHtml(SCOPES[scope])}</span></li>`
+        `<li><label><input type="checkbox" name="grant" value="${escapeHtml(scope)}" checked />` +
+        `<code>${escapeHtml(scope)}</code><span>${escapeHtml(SCOPES[scope])}</span></label></li>`
     )
     .join("");
 
+  // Everything except the checkbox values rides along unchanged, so the POST
+  // can be validated against the same request that was displayed.
   const hidden = Object.entries(params)
-    .filter(([, value]) => value)
+    .filter(([name, value]) => value && name !== "grant" && name !== "decision")
     .map(
       ([name, value]) =>
         `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}" />`
@@ -203,11 +208,15 @@ function consentPage(client, scopes, identity, params) {
   h1 { font-size:1.1rem; letter-spacing:.05em; }
   .who { color:var(--muted); font-size:.85rem; }
   ul { list-style:none; padding:0; margin:1.2rem 0; display:grid; gap:.5rem; }
-  li { background:var(--card); border:1px solid var(--border); border-radius:3px;
-       padding:.6rem .8rem; display:grid; gap:.15rem; }
+  li { background:var(--card); border:1px solid var(--border); border-radius:3px; }
+  li label { display:grid; grid-template-columns:auto 1fr; gap:.15rem .6rem;
+             padding:.6rem .8rem; cursor:pointer; }
+  li input { grid-row:1 / span 2; align-self:center; accent-color:var(--accent);
+             width:1.1em; height:1.1em; }
   li code { color:#360c97; background:#dadfe0; padding:.1em .3em; font-size:.8rem;
             justify-self:start; }
   li span { font-size:.9rem; }
+  li:has(input:not(:checked)) { opacity:.55; }
   form { display:flex; gap:.5rem; margin-top:1.5rem; }
   button { font:inherit; font-size:.9rem; padding:.5rem 1rem; border-radius:3px;
            border:1px solid var(--border); background:var(--bg); color:var(--fg); cursor:pointer; }
@@ -225,8 +234,8 @@ function consentPage(client, scopes, identity, params) {
     <button class="approve" type="submit" name="decision" value="approve">Approve</button>
     <button class="deny" type="submit" name="decision" value="deny">Deny</button>
   </form>
-  <p class="note">Requested scopes are shown exactly as they will be granted; a client
-     cannot widen them later without asking again.</p>
+  <p class="note">Untick anything you would rather not grant. A client is told what it
+     actually received, and cannot widen it later without asking again.</p>
 </main></body></html>`;
 }
 
@@ -301,7 +310,16 @@ export async function authorize(request, env, identity, origin) {
   const target = new URL(redirectUri);
   if (params.state) target.searchParams.set("state", params.state);
 
-  if (form.get("decision") !== "approve") {
+  // Read the ticked boxes from the form rather than from `params`, which
+  // collapsed the repeated field down to its last value.
+  const ticked = form.getAll("grant").map(String);
+  // Only ever a subset of what was displayed: a tampered form cannot grant
+  // more than the client asked for.
+  const granted = scopes.filter((scope) => ticked.includes(scope));
+
+  // Nothing ticked is a refusal, not an empty grant — a token that can do
+  // nothing would look like success to the client.
+  if (form.get("decision") !== "approve" || granted.length === 0) {
     target.searchParams.set("error", "access_denied");
     return Response.redirect(target.href, 302);
   }
@@ -313,7 +331,7 @@ export async function authorize(request, env, identity, origin) {
       client_id: client.client_id,
       redirect_uri: redirectUri,
       code_challenge: params.code_challenge,
-      scopes,
+      scopes: granted,
       identity,
       resource: resourceOf(origin),
     }),
