@@ -165,6 +165,37 @@
 
     .message .meta { font-size: 0.72rem; color: var(--muted); }
 
+    /* ---------- Tool calls ---------- */
+    .message .tools { display: grid; gap: 0.35rem; }
+
+    .tool {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.35rem 0.7rem;
+      background: var(--bg);
+      font-size: 0.85rem;
+    }
+
+    .tool.error { border-color: var(--danger); }
+    .tool summary { cursor: pointer; }
+    .tool .name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .tool .target { color: var(--muted); overflow-wrap: anywhere; }
+    .tool .state { font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+    .tool.error .state { color: var(--danger); }
+
+    .tool .output {
+      margin-top: 0.4rem;
+      padding-top: 0.4rem;
+      border-top: 1px solid var(--border);
+      max-height: 18rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem;
+      line-height: 1.5;
+    }
+
     .empty {
       margin: 3rem auto;
       max-width: 32rem;
@@ -224,6 +255,11 @@
       <div class="field">
         <label for="max-tokens">Max output tokens</label>
         <input id="max-tokens" type="number" min="1" max="128000" step="1000" />
+      </div>
+      <div class="field">
+        <label for="tools-enabled">Tools</label>
+        <label class="muted"><input id="tools-enabled" type="checkbox" /> Let the model call tools</label>
+        <p id="tools-note" class="note muted"></p>
       </div>
     </div>
   </section>

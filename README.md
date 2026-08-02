@@ -16,11 +16,13 @@ src/            JavaScript sources (bundled into public/app.js)
   ui/           Rendering: one message, with streaming updates
   app.js        Entry point: DOM refs, controls, and the send loop
 public/         Deployed assets: index.html (CSS inlined) + the built bundle
-worker.js       Worker entry: routing, request validation, the chat proxy
+worker.js       Worker entry: routing, request validation, response streaming
 worker/
   access.js     Cloudflare Access JWT verification
   providers.js  Provider catalog + per-vendor request/response adapters
-  stream.js     Upstream SSE -> normalized SSE
+  agent.js      The loop: stream a turn, run tools, feed results back
+  tools.js      Tool definitions and their sandboxing
+  stream.js     SSE framing, in both directions
 ```
 
 Dependencies run one way: `lib/ <- data/ <- ui/ <- app.js`.
@@ -81,10 +83,12 @@ model list with capability flags, a `request()` that builds the upstream fetch,
 and a `parse()` that turns one upstream SSE payload into normalized events:
 
 ```
-{ type: "text",     text }
-{ type: "thinking", text }
-{ type: "meta",     stopReason, usage: { input, output } }
-{ type: "error",    message }
+{ type: "text",       text }
+{ type: "thinking",   text }
+{ type: "tool_call",  id, name, input, summary }
+{ type: "tool_result", id, name, ok, content }
+{ type: "meta",       stopReason, usage: { input, output }, round }
+{ type: "error",      message }
 ```
 
 Everything above that layer — the Worker's router, the whole front end — only
@@ -100,6 +104,52 @@ reasoning, which is shown in a collapsible block above the reply.
 Model ids move faster than a checked-in list does, so the model picker has a
 "Custom…" option that accepts any id. An unrecognized id still works — it just
 inherits the provider's default capability flags.
+
+## Tool calling
+
+Tools are off by default; the settings panel turns them on. There is one tool
+so far, `fetch_url`, which retrieves a public http(s) URL — HTML is reduced to
+readable text with `HTMLRewriter`, JSON comes back as-is.
+
+With tools enabled a send becomes a loop in `worker/agent.js`: stream a turn,
+run whatever tools the model asked for, hand the results back, stream the next
+turn, up to five rounds. The browser sees one continuous event stream either
+way, so a tool call is a rendering detail rather than a protocol change. Tool
+calls appear in the transcript as collapsed rows that expand to the exact text
+the model was given.
+
+Tools are declared once in `worker/tools.js` as plain JSON Schema; each adapter
+translates that into its own dialect (`input_schema`, `functionDeclarations`,
+`type: "function"`). The awkward part is the return leg: the assistant turn
+containing the tool call has to be sent back *verbatim*, and reasoning blocks
+carry signatures the provider validates. So each adapter accumulates the raw
+native content as it streams rather than reconstructing it afterwards, and
+exposes `assistantTurn`/`resultTurn` to replay it.
+
+Two consequences worth knowing:
+
+- **The loop resolves inside one request.** What the browser stores is one user
+  message and one assistant reply, so history stays vendor-neutral and you can
+  switch providers mid-conversation. The cost is that a later turn sees the
+  model's summary of what it fetched, not the raw tool transcript.
+- **Tool rows are hoisted above the reply text.** Calls and text are kept in
+  order within themselves, but narration interleaved between calls collapses
+  into one block.
+
+### What the tool will not fetch
+
+The model chooses the URL, so `fetch_url` is a request forgery surface. It
+refuses non-http(s) schemes, this Worker's own origin, and private, loopback,
+and link-local addresses — including cloud metadata at `169.254.169.254`. It
+blocks address *literals*; a public hostname that resolves to a private address
+would still pass, which is the platform's boundary to hold rather than this
+Worker's, since Workers egress goes out to the public internet. Responses are
+capped at 512 KB read, 12,000 characters given to the model, and a 15s timeout.
+
+Fetched pages are untrusted input going straight into the context window, so
+the tool result is prefixed with a note saying so. Treat that as mitigation,
+not a guarantee: a page that tells the model to fetch something else may well
+get it to try.
 
 ## State
 

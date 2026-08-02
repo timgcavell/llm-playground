@@ -5,7 +5,7 @@
 // event stream, so this file never knows which vendor answered.
 
 import { readEvents } from "./lib/sse.js";
-import { capsFor, defaultProvider, getProvider, loadCatalog, providers } from "./data/catalog.js";
+import { capsFor, defaultProvider, getProvider, loadCatalog, providers, tools } from "./data/catalog.js";
 import {
   addMessage,
   clearMessages,
@@ -33,6 +33,8 @@ const el = {
   temperatureValue: document.getElementById("temperature-value"),
   temperatureNote: document.getElementById("temperature-note"),
   maxTokens: document.getElementById("max-tokens"),
+  toolsEnabled: document.getElementById("tools-enabled"),
+  toolsNote: document.getElementById("tools-note"),
   thread: document.getElementById("thread"),
   scroller: document.querySelector("main"),
   composer: document.getElementById("composer"),
@@ -159,6 +161,21 @@ function applySettingsToControls() {
   el.temperature.value = config.temperature;
   el.temperatureValue.textContent = Number(config.temperature).toFixed(2);
   el.maxTokens.value = config.maxTokens;
+  el.toolsEnabled.checked = Boolean(config.tools);
+}
+
+function describeTools() {
+  const available = tools();
+  if (available.length === 0) {
+    el.toolsNote.textContent = "";
+    return;
+  }
+  const names = available.map((tool) => tool.name).join(", ");
+  // Worth stating plainly: enabling this means the model chooses what to
+  // fetch, and whatever comes back is untrusted text going into the context.
+  el.toolsNote.textContent =
+    `Available: ${names}. The model decides when to call them, and fetched pages ` +
+    `are untrusted — treat anything they say as content, not instructions.`;
 }
 
 // ---------- Sending ----------
@@ -202,6 +219,7 @@ async function send(text) {
         system: el.system.value.trim(),
         temperature: Number(el.temperature.value),
         maxTokens: Number(el.maxTokens.value),
+        tools: el.toolsEnabled.checked,
         // The assistant turn in progress is empty, so it is filtered out here.
         messages: turnsForRequest(),
       }),
@@ -214,18 +232,38 @@ async function send(text) {
     }
 
     let streamError = null;
+    // A turn with tool calls spans several upstream calls. Within one call the
+    // usage figure is a running total that gets restated, so the latest value
+    // for a round replaces the previous one and the rounds are added up.
+    const usageByRound = new Map();
+    const totalUsage = () => {
+      const total = { input: 0, output: 0 };
+      for (const round of usageByRound.values()) {
+        total.input += round.input ?? 0;
+        total.output += round.output ?? 0;
+      }
+      return total;
+    };
+
     for await (const event of readEvents(response)) {
       const stick = nearBottom();
       if (event.type === "text") handle.appendText(event.text);
       else if (event.type === "thinking") handle.appendThinking(event.text);
-      else if (event.type === "meta") handle.setMeta(describeMeta(event));
-      else if (event.type === "error") streamError = event.message;
+      else if (event.type === "tool_call") {
+        handle.addTool(event);
+      } else if (event.type === "tool_result") {
+        handle.resolveTool(event);
+      } else if (event.type === "meta") {
+        usageByRound.set(event.round ?? 0, event.usage ?? {});
+        handle.setMeta(describeMeta({ stopReason: event.stopReason, usage: totalUsage() }));
+      } else if (event.type === "error") streamError = event.message;
       if (stick) scrollToBottom();
     }
+    handle.settleTools();
 
     if (streamError) throw new Error(streamError);
 
-    if (!assistant.content && !assistant.thinking) {
+    if (!assistant.content && !assistant.thinking && !assistant.tools?.length) {
       removeMessage(assistant);
       handle.el.remove();
       setStatus("The model returned no content.", true);
@@ -233,13 +271,15 @@ async function send(text) {
       setStatus("");
     }
   } catch (err) {
+    // Whatever went wrong, no tool is still running.
+    handle.settleTools();
     if (err.name === "AbortError") {
       handle.setMeta([assistant.meta, "stopped"].filter(Boolean).join(" · "));
       setStatus("Stopped.");
     } else {
       // Keep whatever streamed before the failure, and show the failure as its
       // own entry so the transcript stays a faithful record of the exchange.
-      if (!assistant.content && !assistant.thinking) {
+      if (!assistant.content && !assistant.thinking && !assistant.tools?.length) {
         removeMessage(assistant);
         handle.el.remove();
       }
@@ -302,6 +342,10 @@ el.maxTokens.addEventListener("change", () =>
   updateSettings({ maxTokens: Number(el.maxTokens.value) })
 );
 
+el.toolsEnabled.addEventListener("change", () =>
+  updateSettings({ tools: el.toolsEnabled.checked })
+);
+
 el.stop.addEventListener("click", () => inFlight?.abort());
 
 el.composer.addEventListener("submit", (event) => {
@@ -334,6 +378,7 @@ async function boot() {
   }
 
   populateProviders();
+  describeTools();
   const config = settings();
   const provider = getProvider(config.provider) || defaultProvider();
   if (!provider) {

@@ -3,6 +3,7 @@
 // says which providers have a key configured — never what the key is.
 
 let catalog = [];
+let toolList = [];
 
 export async function loadCatalog() {
   const res = await fetch("/api/providers");
@@ -12,11 +13,18 @@ export async function loadCatalog() {
   }
   const data = await res.json();
   catalog = data.providers;
+  toolList = data.tools ?? [];
   return data;
 }
 
 export function providers() {
   return catalog;
+}
+
+// Tools are declared server-side, so the UI names whatever the Worker offers
+// rather than keeping its own copy of the list.
+export function tools() {
+  return toolList;
 }
 
 export function getProvider(id) {

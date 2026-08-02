@@ -11,6 +11,8 @@ const DEFAULT_SETTINGS = {
   system: "",
   temperature: 1,
   maxTokens: 32000,
+  // Off by default: enabling it lets the model fetch arbitrary public URLs.
+  tools: false,
 };
 
 const state = {
@@ -50,8 +52,10 @@ export function messages() {
   return state.messages;
 }
 
-// Only role and content go upstream — thinking summaries and usage are local
-// display state, and echoing them back would confuse the providers.
+// Only role and content go upstream — thinking summaries, tool transcripts and
+// usage are local display state. The tool loop is resolved inside a single
+// request, so history stays vendor-neutral and the provider can be switched
+// mid-conversation.
 export function turnsForRequest() {
   return state.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
