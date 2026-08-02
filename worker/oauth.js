@@ -236,8 +236,7 @@ function consentPage(client, scopes, identity, params) {
 // Errors before the redirect_uri is trusted are shown to the user; errors
 // after it are redirected back to the client, per the spec — bouncing an
 // unvalidated redirect_uri would make this an open redirector.
-async function validateAuthorize(url, env, origin) {
-  const params = Object.fromEntries(url.searchParams);
+async function validateAuthorize(params, env, origin) {
   const clientId = params.client_id;
   if (!clientId) return { error: oauthError("invalid_request", "client_id is required") };
 
@@ -275,11 +274,23 @@ async function validateAuthorize(url, env, origin) {
 }
 
 export async function authorize(request, env, identity, origin) {
-  const url = new URL(request.url);
-  const validated = await validateAuthorize(url, env, origin);
+  // The request arrives twice: as a GET carrying the parameters in the query
+  // string, then as the consent form's POST carrying them back as hidden
+  // fields. Read from whichever the method implies — a POST has no query
+  // string of its own, so reading only searchParams loses every parameter.
+  let params;
+  let form = null;
+  if (request.method === "POST") {
+    form = await request.formData();
+    params = Object.fromEntries([...form.entries()].map(([key, value]) => [key, String(value)]));
+  } else {
+    params = Object.fromEntries(new URL(request.url).searchParams);
+  }
+
+  const validated = await validateAuthorize(params, env, origin);
   if (validated.error) return validated.error;
 
-  const { client, scopes, params, redirectUri } = validated;
+  const { client, scopes, redirectUri } = validated;
 
   if (request.method === "GET") {
     return new Response(consentPage(client, scopes, identity, params), {
@@ -287,7 +298,6 @@ export async function authorize(request, env, identity, origin) {
     });
   }
 
-  const form = await request.formData();
   const target = new URL(redirectUri);
   if (params.state) target.searchParams.set("state", params.state);
 
