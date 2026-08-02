@@ -24,5 +24,8 @@ GITHUB_API_KEY=
 # serving the keys to whoever finds the URL.
 LOCAL_DEV=1
 
+# Locally the issuer is the dev server, not the deployed hostname.
+PUBLIC_ORIGIN=http://localhost:8787
+
 CF_ACCESS_AUD=
 CF_ACCESS_TEAM_DOMAIN=timgcavell.cloudflareaccess.com

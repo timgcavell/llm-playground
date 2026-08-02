@@ -2,6 +2,7 @@ import { authenticate } from "./worker/access.js";
 import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
 import { handleMcp } from "./worker/mcp.js";
+import * as oauth from "./worker/oauth.js";
 import { handleSocket, isUpgrade } from "./worker/socket.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
 import { CREDENTIALS, availableTools } from "./worker/tools.js";
@@ -208,6 +209,48 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // The issuer identifier clients compare against. Configured rather than
+    // derived, because request.url's host is whatever the last hop said it
+    // was — `wrangler dev` reports the route hostname on GET and the real one
+    // on POST, which would make discovery disagree with itself.
+    const origin = env.PUBLIC_ORIGIN || url.origin;
+
+    // Discovery and token exchange must be reachable without a session: a
+    // client that doesn't have a token yet cannot be asked to present one.
+    // These need an Access bypass policy on the deployed app — see the README.
+    if (url.pathname === "/.well-known/oauth-protected-resource") {
+      return oauth.protectedResourceMetadata(origin);
+    }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      return oauth.authorizationServerMetadata(origin);
+    }
+    if (url.pathname === "/oauth/register") return oauth.register(request, env);
+    if (url.pathname === "/oauth/token") return oauth.token(request, env);
+
+    // Consent, by contrast, is exactly where identity is needed, so it stays
+    // behind Access: the token is bound to whoever is signed in.
+    if (url.pathname === "/oauth/authorize") {
+      const identity = await authenticate(request, env);
+      if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
+      return oauth.authorize(request, env, identity.email, origin);
+    }
+
+    // The MCP endpoint accepts either a delegated bearer token or an Access
+    // session. A bearer token carries scopes; an Access session is the account
+    // holder and carries none, meaning no restriction.
+    if (url.pathname === "/api/mcp") {
+      const bearer = request.headers.get("authorization");
+      if (bearer) {
+        const grant = await oauth.verifyBearer(request, env, origin);
+        if (!grant) return oauth.unauthorized(origin, "Invalid or expired access token");
+        return handleMcp(request, buildToolContext(env, url, grant.identity), grant.scopes);
+      }
+      const identity = await authenticate(request, env);
+      // Steer a browser-less client toward OAuth rather than a login redirect.
+      if (identity.error) return oauth.unauthorized(origin);
+      return handleMcp(request, buildToolContext(env, url, identity.email));
+    }
+
     if (url.pathname.startsWith("/api/")) {
       const identity = await authenticate(request, env);
       if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
@@ -221,11 +264,6 @@ export default {
             description: tool.description,
           })),
         });
-      }
-
-      // The tool registry as an MCP server, for external MCP clients.
-      if (url.pathname === "/api/mcp") {
-        return handleMcp(request, buildToolContext(env, url, identity.email));
       }
 
       // Two-way transport, so tools that need confirmation can ask.

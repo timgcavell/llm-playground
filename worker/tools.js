@@ -625,10 +625,33 @@ async function githubOpenPr(input, context) {
   return { ok: true, content: `Opened pull request #${pr.data.number}: ${pr.data.html_url}` };
 }
 
+// ---------- Scopes ----------
+//
+// Every tool belongs to one scope, so a delegated client can be granted part
+// of the registry rather than all of it. The split follows blast radius —
+// what a caller can do with it, not what it is about:
+//
+//   tools:read    reaches outward, changes nothing here
+//   memory:read   reads this identity's stored notes
+//   memory:write  changes or deletes them
+//   github:write  changes code in a repository
+//
+// This is what an authorization decision is made of. A consent screen that
+// says "GitHub write" means something; one that says "tools" does not.
+export const SCOPES = {
+  "tools:read": "Fetch web pages, search, check the time, and ask other models",
+  "memory:read": "Read your saved notes",
+  "memory:write": "Save and delete your notes",
+  "github:write": "Commit to branches and open pull requests",
+};
+
+export const DEFAULT_SCOPES = ["tools:read", "memory:read"];
+
 // ---------- Registry ----------
 
 const TOOLS = {
   fetch_url: {
+    scope: "tools:read",
     available: () => true,
     describe: (context) => ({
       description:
@@ -658,6 +681,7 @@ const TOOLS = {
   },
 
   web_search: {
+    scope: "tools:read",
     available: (context) => Boolean(context.search),
     describe: () => ({
       description:
@@ -677,6 +701,7 @@ const TOOLS = {
   },
 
   get_current_time: {
+    scope: "tools:read",
     available: () => true,
     describe: () => ({
       description:
@@ -698,6 +723,7 @@ const TOOLS = {
   },
 
   ask_model: {
+    scope: "tools:read",
     available: (context) => Boolean(context.askModel) && context.askableProviders?.length > 0,
     describe: (context) => ({
       description:
@@ -730,6 +756,7 @@ const TOOLS = {
   },
 
   github_write_file: {
+    scope: "github:write",
     available: (context) => Boolean(context.github),
     needsApproval: true,
     describe: () => ({
@@ -757,6 +784,7 @@ const TOOLS = {
   },
 
   github_open_pr: {
+    scope: "github:write",
     available: (context) => Boolean(context.github),
     needsApproval: true,
     describe: () => ({
@@ -780,6 +808,7 @@ const TOOLS = {
   },
 
   save_memory: {
+    scope: "memory:write",
     available: (context) => Boolean(context.memory),
     describe: () => ({
       description:
@@ -800,6 +829,7 @@ const TOOLS = {
   },
 
   read_memory: {
+    scope: "memory:read",
     available: (context) => Boolean(context.memory),
     describe: () => ({
       description:
@@ -816,6 +846,7 @@ const TOOLS = {
   },
 
   list_memories: {
+    scope: "memory:read",
     available: (context) => Boolean(context.memory),
     describe: () => ({
       description: "List the keys that currently have something stored under them.",
@@ -826,6 +857,7 @@ const TOOLS = {
   },
 
   delete_memory: {
+    scope: "memory:write",
     available: (context) => Boolean(context.memory),
     // Irreversible, so ask first where the transport can carry an answer.
     needsApproval: true,
@@ -849,7 +881,7 @@ const TOOLS = {
 export function availableTools(context) {
   return Object.entries(TOOLS)
     .filter(([, tool]) => tool.available(context))
-    .map(([name, tool]) => ({ name, ...tool.describe(context) }));
+    .map(([name, tool]) => ({ name, scope: tool.scope, ...tool.describe(context) }));
 }
 
 // Whether a tool should be confirmed before it runs. Only meaningful on a

@@ -272,6 +272,56 @@ Service-token JWTs carry a `common_name` claim instead of `email`;
 `authenticate()` accepts either, so a token gets its own memory namespace the
 way a person does.
 
+### OAuth (for clients that can't set headers)
+
+Service tokens only work for clients that let you set request headers — hosted
+MCP clients don't, and they only speak OAuth. `worker/oauth.js` is an OAuth 2.1
+authorization server and resource server for the MCP endpoint: discovery
+(RFC 9728 + RFC 8414), dynamic client registration (RFC 7591), authorization
+code with PKCE, and refresh.
+
+Identity is not reinvented. `/oauth/authorize` sits behind Access, so consent
+is shown to someone already signed in and the token is bound to that identity.
+This server decides *what* a client may do; Access decides *who* the user is.
+
+**Scopes are the point.** Each tool declares one, split by blast radius:
+
+| Scope | Tools |
+| --- | --- |
+| `tools:read` | `fetch_url`, `web_search`, `get_current_time`, `ask_model` |
+| `memory:read` | `read_memory`, `list_memories` |
+| `memory:write` | `save_memory`, `delete_memory` |
+| `github:write` | `github_write_file`, `github_open_pr` |
+
+A bearer token sees only its granted scopes — out-of-scope tools are absent
+from `tools/list` and unknown to `tools/call`, since enumerating what a client
+can't have tells it nothing useful. An Access session carries no scopes and
+sees everything: it is the account holder, not a delegate.
+
+Choices worth knowing, since they are what the exercise was for:
+
+- **PKCE S256 required, no client secrets.** A secret a desktop client keeps in
+  a config file protects nothing; public client + PKCE is the honest shape.
+- **Tokens are opaque and stored only as SHA-256 digests.** A dump of the KV
+  namespace yields no working credentials.
+- **Authorization codes burn on any exchange attempt**, successful or not — a
+  failed PKCE check means someone else has the code. **Refresh tokens rotate
+  only on success**, because burning one on a malformed request would let a
+  single bad refresh destroy a working grant.
+- **`resource` (RFC 8707) is validated on both ends.** A token minted for
+  another MCP server is refused here even if this server issued it — the
+  confused-deputy problem the MCP spec added resource indicators to close.
+- **`PUBLIC_ORIGIN` is configured, not derived.** Clients compare the
+  discovered issuer byte-for-byte, and `request.url`'s host is whatever the
+  last hop said it was.
+
+**Deploying this needs an Access bypass for the unauthenticated paths.** A
+client with no token can't be asked to present one, so `/.well-known/*`,
+`/oauth/register`, and `/oauth/token` must be reachable without a session,
+while `/oauth/authorize` must stay gated. In the Access app, add a policy with
+action **Bypass** scoped to those paths — or configure them as a separate
+unprotected application on the same hostname.
+
 ## Transports
 
 Two ways to run a turn, chosen by a checkbox in the settings panel. Both carry

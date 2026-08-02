@@ -14,6 +14,15 @@
 
 import { availableTools, runTool } from "./tools.js";
 
+// What this caller may reach: configuration decides which tools exist, and
+// the granted scopes decide which of those are visible. A scope-less caller
+// (Access service token, browser session) gets everything — it is already the
+// account holder, not a delegate.
+function permittedTools(toolContext, scopes) {
+  const tools = availableTools(toolContext);
+  return scopes ? tools.filter((tool) => scopes.includes(tool.scope)) : tools;
+}
+
 // Versions of the spec this shape satisfies. Echo the client's if we know it,
 // otherwise offer the newest we speak and let the client decide.
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26"];
@@ -36,7 +45,7 @@ function failure(id, code, message) {
 
 // Dispatch one JSON-RPC message. Returns the response object, or null for
 // notifications, which get an acknowledgement but no body.
-export async function dispatch(message, toolContext) {
+export async function dispatch(message, toolContext, scopes = null) {
   if (
     typeof message !== "object" ||
     message === null ||
@@ -73,7 +82,7 @@ export async function dispatch(message, toolContext) {
 
     case "tools/list":
       return result(id, {
-        tools: availableTools(toolContext).map((tool) => ({
+        tools: permittedTools(toolContext, scopes).map((tool) => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.schema,
@@ -82,10 +91,12 @@ export async function dispatch(message, toolContext) {
 
     case "tools/call": {
       const name = params?.name;
-      const known = availableTools(toolContext).some((tool) => tool.name === name);
+      const known = permittedTools(toolContext, scopes).some((tool) => tool.name === name);
       // An unknown tool is a protocol error; a tool that ran and failed is a
       // successful call whose result says so. Clients handle the two
-      // differently, so the distinction matters.
+      // differently, so the distinction matters. A tool the caller's scopes
+      // exclude is simply not there — enumerating what it can't have tells a
+      // delegated client nothing useful.
       if (!known) return failure(id, INVALID_PARAMS, `Unknown tool: ${name}`);
 
       const { ok, content } = await runTool(name, params?.arguments ?? {}, toolContext);
@@ -98,7 +109,7 @@ export async function dispatch(message, toolContext) {
   }
 }
 
-export async function handleMcp(request, toolContext) {
+export async function handleMcp(request, toolContext, scopes = null) {
   if (request.method !== "POST") {
     // No server-initiated stream and no sessions to delete — both optional.
     return new Response(null, { status: 405, headers: { allow: "POST" } });
@@ -119,7 +130,7 @@ export async function handleMcp(request, toolContext) {
     });
   }
 
-  const response = await dispatch(message, toolContext);
+  const response = await dispatch(message, toolContext, scopes);
   if (response === null) return new Response(null, { status: 202 });
   return Response.json(response);
 }

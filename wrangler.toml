@@ -24,6 +24,9 @@ not_found_handling = "single-page-application"
 # .dev.vars, which is untracked and never deployed.
 [vars]
 CF_ACCESS_TEAM_DOMAIN = "timgcavell.cloudflareaccess.com"
+# The OAuth issuer identifier. Clients compare the discovered issuer exactly,
+# so it is configured rather than derived from the request URL.
+PUBLIC_ORIGIN = "https://llm.timgcavell.com"
 CF_ACCESS_AUD = "0801839dd86b96a2e167a36ea8002f6a3c5da56d61bd826fad4f8e1734855c63"
 
 # Backs the memory tools. Notes are keyed by the Access email, so one
@@ -31,6 +34,12 @@ CF_ACCESS_AUD = "0801839dd86b96a2e167a36ea8002f6a3c5da56d61bd826fad4f8e1734855c6
 [[kv_namespaces]]
 binding = "MEMORY"
 id = "196c11ce704346179769bf28a359a6e7"
+
+# OAuth clients, codes, and tokens for the MCP endpoint. Separate from MEMORY
+# so credentials and user notes never share a keyspace.
+[[kv_namespaces]]
+binding = "OAUTH"
+id = "f5abac5b064a494fad33c894e1042924"
 
 # Provider API keys are secrets, never vars — they must not live in this file:
 #   wrangler secret put ANTHROPIC_API_KEY
