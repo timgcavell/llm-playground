@@ -1,0 +1,19 @@
+# Copy to `.dev.vars` (untracked) for local `wrangler dev`. Only the providers
+# whose keys are present here show up as available in the UI.
+#
+# In production these are Wrangler secrets, not vars:
+#   wrangler secret put ANTHROPIC_API_KEY
+#
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+
+# There is no Access in front of `wrangler dev`, so LOCAL_DEV=1 tells the
+# Worker to accept a stub identity. It lives here rather than in wrangler.toml
+# precisely because this file is untracked and never deployed: a deployed
+# Worker with no CF_ACCESS_AUD refuses to talk to any provider instead of
+# serving the keys to whoever finds the URL.
+LOCAL_DEV=1
+
+CF_ACCESS_AUD=
+CF_ACCESS_TEAM_DOMAIN=timgcavell.cloudflareaccess.com

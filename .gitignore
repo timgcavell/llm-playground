@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.DS_Store
+
+# API keys for `wrangler dev`. Never commit; production uses `wrangler secret`.
+.dev.vars
+
+# Build output (generated from src/ by `npm run build`)
+public/app.js
+public/app.js.map

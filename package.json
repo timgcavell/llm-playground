@@ -1,0 +1,16 @@
+{
+  "name": "llm-playground",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/app.js --bundle --format=esm --target=es2022 --minify --sourcemap --outfile=public/app.js",
+    "watch": "npm run build -- --watch",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "wrangler": "^4.110.0"
+  }
+}

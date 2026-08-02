@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLM Playground</title>
+  <!-- CSS is inlined rather than linked so the first paint is never unstyled:
+       behind Cloudflare Access a cold-load request for a separate stylesheet
+       can be redirected to the login page, flashing unstyled content. -->
+  <style>
+    /* ---------- Design tokens ---------- */
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #1b1f24;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --accent: #0969da;
+      --danger: #cf222e;
+      --card-bg: #f6f8fa;
+      --active-bg: #ddf0ff;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --fg: #e6edf3;
+        --muted: #8b949e;
+        --border: #30363d;
+        --accent: #58a6ff;
+        --danger: #f85149;
+        --card-bg: #161b22;
+        --active-bg: #12233b;
+      }
+    }
+
+    /* ---------- Base ---------- */
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    [hidden] { display: none !important; }
+    .muted { color: var(--muted); }
+
+    /* ---------- Controls ---------- */
+    .btn {
+      padding: 0.45rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--card-bg);
+      color: var(--fg);
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn:hover:not(:disabled) { border-color: var(--accent); }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-danger { color: var(--danger); }
+
+    select, input, textarea {
+      font: inherit;
+      font-size: 0.9rem;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.5rem;
+    }
+
+    select:disabled, input:disabled { opacity: 0.5; }
+    textarea { resize: vertical; width: 100%; }
+
+    /* ---------- Top bar ---------- */
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-bg);
+    }
+
+    .topbar h1 {
+      margin: 0 0.5rem 0 0;
+      font-size: 1rem;
+      letter-spacing: -0.01em;
+    }
+
+    .topbar .spacer { flex: 1; }
+    #custom-model { width: 14rem; }
+
+    /* ---------- Settings ---------- */
+    #settings {
+      display: grid;
+      gap: 0.9rem;
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-bg);
+    }
+
+    #settings label { display: block; font-size: 0.8rem; font-weight: 600; }
+    #settings .field { display: grid; gap: 0.35rem; }
+    #settings .row { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+    #settings .note { margin: 0; font-size: 0.75rem; }
+    #temperature { vertical-align: middle; }
+
+    /* ---------- Messages ---------- */
+    main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+    }
+
+    .thread { max-width: 52rem; margin: 0 auto; display: grid; gap: 1rem; }
+
+    .message { display: grid; gap: 0.35rem; }
+    .message .role {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .message .body {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.55;
+      padding: 0.7rem 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card-bg);
+    }
+
+    .message.user .body { background: var(--active-bg); border-color: var(--accent); }
+    .message.error .body { border-color: var(--danger); color: var(--danger); }
+
+    .message .thinking {
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 0.4rem 0.7rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .message .thinking summary { cursor: pointer; font-weight: 600; }
+    .message .thinking .body {
+      background: none;
+      border: none;
+      padding: 0.4rem 0 0;
+      font-size: 0.85rem;
+    }
+
+    .message .meta { font-size: 0.72rem; color: var(--muted); }
+
+    .empty {
+      margin: 3rem auto;
+      max-width: 32rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* ---------- Composer ---------- */
+    footer {
+      border-top: 1px solid var(--border);
+      background: var(--card-bg);
+      padding: 0.7rem 1rem;
+    }
+
+    #composer {
+      max-width: 52rem;
+      margin: 0 auto;
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-end;
+    }
+
+    #prompt { min-height: 3.2rem; max-height: 14rem; }
+    #status { max-width: 52rem; margin: 0.4rem auto 0; font-size: 0.75rem; min-height: 1rem; }
+    #status.error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>LLM Playground</h1>
+
+    <label class="muted" for="provider">Provider</label>
+    <select id="provider"></select>
+
+    <label class="muted" for="model">Model</label>
+    <select id="model"></select>
+    <input id="custom-model" type="text" placeholder="model id" hidden />
+
+    <span class="spacer"></span>
+
+    <button id="toggle-settings" class="btn" type="button" aria-expanded="false">Settings</button>
+    <button id="new-chat" class="btn" type="button">New chat</button>
+  </header>
+
+  <section id="settings" hidden>
+    <div class="field">
+      <label for="system">System prompt</label>
+      <textarea id="system" rows="3" placeholder="Optional instructions sent with every turn"></textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="temperature">Temperature <span id="temperature-value"></span></label>
+        <input id="temperature" type="range" min="0" max="2" step="0.05" />
+        <p id="temperature-note" class="note muted"></p>
+      </div>
+      <div class="field">
+        <label for="max-tokens">Max output tokens</label>
+        <input id="max-tokens" type="number" min="1" max="128000" step="1000" />
+      </div>
+    </div>
+  </section>
+
+  <main>
+    <div id="thread" class="thread"></div>
+  </main>
+
+  <footer>
+    <form id="composer">
+      <textarea id="prompt" rows="2" placeholder="Send a message…  (Enter to send, Shift+Enter for a new line)"></textarea>
+      <button id="send" class="btn btn-primary" type="submit">Send</button>
+      <button id="stop" class="btn btn-danger" type="button" hidden>Stop</button>
+    </form>
+    <p id="status" class="muted"></p>
+  </footer>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
