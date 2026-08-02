@@ -26,4 +26,7 @@ CF_ACCESS_AUD = "0801839dd86b96a2e167a36ea8002f6a3c5da56d61bd826fad4f8e1734855c6
 #   wrangler secret put ANTHROPIC_API_KEY
 #   wrangler secret put GEMINI_API_KEY
 #   wrangler secret put OPENAI_API_KEY
+# And, to enable the web_search tool, whichever of these you have:
+#   wrangler secret put BRAVE_SEARCH_API_KEY
+#   wrangler secret put TAVILY_API_KEY
 # Locally they come from .dev.vars (untracked).

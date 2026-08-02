@@ -8,6 +8,11 @@ ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 OPENAI_API_KEY=
 
+# Backs the web_search tool. Set whichever one you have — Brave wins if both
+# are present. With neither, the tool is simply not offered to the model.
+BRAVE_SEARCH_API_KEY=
+TAVILY_API_KEY=
+
 # There is no Access in front of `wrangler dev`, so LOCAL_DEV=1 tells the
 # Worker to accept a stub identity. It lives here rather than in wrangler.toml
 # precisely because this file is untracked and never deployed: a deployed

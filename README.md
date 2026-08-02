@@ -107,9 +107,22 @@ inherits the provider's default capability flags.
 
 ## Tool calling
 
-Tools are off by default; the settings panel turns them on. There is one tool
-so far, `fetch_url`, which retrieves a public http(s) URL — HTML is reduced to
-readable text with `HTMLRewriter`, JSON comes back as-is.
+Tools are off by default; the settings panel turns them on.
+
+| Tool | What it does | Needs |
+| ---- | ------------ | ----- |
+| `fetch_url` | Retrieves a public http(s) URL. HTML is reduced to readable text with `HTMLRewriter`; JSON comes back as-is. | — |
+| `web_search` | Top results as title/URL/snippet. Pairs with `fetch_url`: search, pick, read. | `BRAVE_SEARCH_API_KEY` or `TAVILY_API_KEY` |
+| `get_current_time` | The current date and time, optionally in an IANA zone. | — |
+| `ask_model` | Puts a one-off question to a different model and returns its answer. | a second provider key |
+
+Availability follows configuration, the same way providers do: a tool whose
+backing key is missing is never offered to the model, rather than being offered
+and always failing. With no search key, `web_search` simply isn't in the list.
+
+`ask_model` reuses the provider adapters for a single prompt with no history
+and no tools of its own — which is also what stops two models calling each
+other in a loop.
 
 With tools enabled a send becomes a loop in `worker/agent.js`: stream a turn,
 run whatever tools the model asked for, hand the results back, stream the next

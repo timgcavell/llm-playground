@@ -11,7 +11,7 @@
 // tool blocks: one exchange in, one assistant reply out.
 
 import { consumeSse } from "./stream.js";
-import { TOOL_DEFS, runTool, summarizeCall } from "./tools.js";
+import { availableTools, runTool, summarizeCall } from "./tools.js";
 
 // Rounds of tool use per message. Each round is another upstream call, so this
 // bounds both cost and latency for a single send.
@@ -27,9 +27,48 @@ async function upstreamError(response) {
   }
 }
 
+// One prompt, one answer, no tools and no history. This is what backs the
+// ask_model tool: the model being asked cannot call tools of its own, which is
+// also what stops two models from calling each other in a loop.
+export async function runOnce({ provider, key, model, caps, prompt, maxTokens }) {
+  const { url, init } = provider.request({
+    key,
+    model,
+    caps,
+    system: "",
+    messages: [{ role: "user", content: prompt }],
+    temperature: null,
+    maxTokens,
+    tools: null,
+    extraTurns: [],
+  });
+
+  const upstream = await fetch(url, init);
+  if (!upstream.ok || !upstream.body) {
+    return {
+      ok: false,
+      content: `${provider.label} returned ${upstream.status}: ${await upstreamError(upstream)}`,
+    };
+  }
+
+  const state = {};
+  let text = "";
+  await consumeSse(upstream, async (data) => {
+    let events;
+    try {
+      events = provider.parse(data, state);
+    } catch {
+      return;
+    }
+    for (const event of events) if (event.type === "text") text += event.text;
+  });
+
+  return { ok: true, content: text.trim() || "(the model returned no text)" };
+}
+
 export async function runAgent(request, emit) {
   const { provider, useTools } = request;
-  const tools = useTools ? TOOL_DEFS : null;
+  const tools = useTools ? availableTools(request.toolContext) : null;
   const extraTurns = [];
 
   for (let round = 0; ; round++) {

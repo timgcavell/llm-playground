@@ -1,8 +1,8 @@
 import { authenticate } from "./worker/access.js";
-import { runAgent } from "./worker/agent.js";
+import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
-import { TOOL_DEFS } from "./worker/tools.js";
+import { availableTools } from "./worker/tools.js";
 
 // The browser never holds a provider API key. It posts a normalized chat
 // request here; the Worker attaches the key from its secrets, runs the
@@ -19,6 +19,48 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+// Everything the tools are allowed to see. Built here rather than handing
+// tools.js the whole env, so the only secrets that reach a tool are the ones
+// it needs, and ask_model gets a narrow callback instead of the key ring.
+function buildToolContext(env, url) {
+  const search = env.BRAVE_SEARCH_API_KEY
+    ? { kind: "brave", key: env.BRAVE_SEARCH_API_KEY }
+    : env.TAVILY_API_KEY
+      ? { kind: "tavily", key: env.TAVILY_API_KEY }
+      : null;
+
+  const askable = Object.entries(PROVIDERS)
+    .filter(([, provider]) => env[provider.keyVar])
+    .map(([id]) => id);
+
+  return {
+    selfHost: url ? url.hostname : null,
+    search,
+    askableProviders: askable,
+    askModel: askable.length
+      ? async ({ provider: id, model, prompt, maxTokens }) => {
+          const provider = PROVIDERS[id];
+          if (!provider) return { ok: false, content: `Unknown provider: ${id}` };
+          const key = env[provider.keyVar];
+          if (!key) return { ok: false, content: `${provider.label} has no API key configured.` };
+
+          const chosen = (typeof model === "string" && model.trim()) || provider.models[0]?.id;
+          if (!chosen) return { ok: false, content: `No model given for ${provider.label}.` };
+
+          const answer = await runOnce({
+            provider,
+            key,
+            model: chosen,
+            caps: modelCaps(provider, chosen),
+            prompt,
+            maxTokens,
+          });
+          return { ...answer, content: `${provider.label} / ${chosen}:\n\n${answer.content}` };
+        }
+      : null,
+  };
 }
 
 // Returns a normalized request, or a string describing what's wrong with it.
@@ -116,7 +158,7 @@ async function handleChat(request, env) {
           key,
           caps: modelCaps(parsed.provider, parsed.model),
           signal: request.signal,
-          toolContext: { selfHost: new URL(request.url).hostname },
+          toolContext: buildToolContext(env, new URL(request.url)),
         },
         stream.emit
       );
@@ -145,7 +187,10 @@ export default {
         return jsonResponse({
           email: identity.email,
           providers: describeProviders(env),
-          tools: TOOL_DEFS.map((tool) => ({ name: tool.name, description: tool.description })),
+          tools: availableTools(buildToolContext(env, url)).map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+          })),
         });
       }
 
