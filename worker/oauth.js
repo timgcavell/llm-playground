@@ -60,7 +60,17 @@ function base64UrlOf(buffer) {
     .replace(/=+$/, "");
 }
 
-function oauthError(error, description, status = 400) {
+// Every refusal and every issuance is logged. An authorization server with no
+// audit trail can only be debugged by guessing, and "it failed" is what a
+// client reports no matter which check said no. Secrets never appear here —
+// codes, verifiers, and tokens are identifying, so only their absence or
+// mismatch is recorded.
+function audit(event, detail) {
+  console.log(JSON.stringify({ at: "oauth", event, ...detail }));
+}
+
+function oauthError(error, description, status = 400, detail = {}) {
+  audit("refused", { error, description, ...detail });
   return Response.json({ error, error_description: description }, { status });
 }
 
@@ -77,8 +87,10 @@ function parseScopes(raw) {
 // because an issuer identifier has to be stable and exact — clients compare
 // the discovered issuer byte-for-byte, and anything that rewrites the request
 // URL (a proxy, an asset pipeline, `wrangler dev`) would otherwise change it.
+export const RESOURCE_PATH = "/api/mcp";
+
 function resourceOf(origin) {
-  return `${origin}/api/mcp`;
+  return `${origin}${RESOURCE_PATH}`;
 }
 
 // A redirect URI must be https, or loopback for a native client. Anything
@@ -259,6 +271,7 @@ async function validateAuthorize(params, env, origin) {
   }
 
   const back = (error, description) => {
+    audit("refused", { error, description, client_id: clientId, via: "redirect" });
     const target = new URL(redirectUri);
     target.searchParams.set("error", error);
     target.searchParams.set("error_description", description);
@@ -338,6 +351,7 @@ export async function authorize(request, env, identity, origin) {
     { expirationTtl: CODE_TTL }
   );
 
+  audit("granted", { client_id: client.client_id, identity, scopes: granted });
   target.searchParams.set("code", code);
   return Response.redirect(target.href, 302);
 }
@@ -355,6 +369,7 @@ async function issueTokens(env, grant) {
     expirationTtl: REFRESH_TTL,
   });
 
+  audit("issued", { client_id: grant.client_id, identity: grant.identity, scopes: grant.scopes });
   return Response.json({
     access_token: accessToken,
     token_type: "Bearer",
@@ -368,7 +383,11 @@ export async function token(request, env) {
   if (request.method !== "POST") return oauthError("invalid_request", "POST required", 405);
 
   const form = await request.formData().catch(() => null);
-  if (!form) return oauthError("invalid_request", "Expected form-encoded body");
+  if (!form) {
+    return oauthError("invalid_request", "Expected form-encoded body", 400, {
+      content_type: request.headers.get("content-type"),
+    });
+  }
   const grantType = form.get("grant_type");
 
   if (grantType === "authorization_code") {
@@ -383,10 +402,16 @@ export async function token(request, env) {
     const record = JSON.parse(stored);
 
     if (record.client_id !== form.get("client_id")) {
-      return oauthError("invalid_grant", "Code was issued to a different client");
+      return oauthError("invalid_grant", "Code was issued to a different client", 400, {
+        expected_client: record.client_id,
+        presented_client: form.get("client_id"),
+      });
     }
     if (record.redirect_uri !== form.get("redirect_uri")) {
-      return oauthError("invalid_grant", "redirect_uri does not match the authorization");
+      return oauthError("invalid_grant", "redirect_uri does not match the authorization", 400, {
+        expected_redirect: record.redirect_uri,
+        presented_redirect: form.get("redirect_uri"),
+      });
     }
 
     const verifier = form.get("code_verifier");

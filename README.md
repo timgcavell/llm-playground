@@ -322,12 +322,23 @@ Choices worth knowing, since they are what the exercise was for:
   discovered issuer byte-for-byte, and `request.url`'s host is whatever the
   last hop said it was.
 
+Discovery is served at both `/.well-known/oauth-protected-resource` and the
+RFC 9728 path-insertion form `/.well-known/oauth-protected-resource/api/mcp` —
+the spec locates a resource's metadata by inserting the well-known segment
+before the resource's path, and real clients ask for that one. Anything else
+under `/.well-known/oauth` returns 404 rather than falling through to the SPA:
+answering discovery with the app shell means HTML and a 200, which a client
+reads as success and then cannot parse.
+
 **Deploying this needs an Access bypass for the unauthenticated paths.** A
 client with no token can't be asked to present one, so `/.well-known/*`,
 `/oauth/register`, and `/oauth/token` must be reachable without a session,
 while `/oauth/authorize` must stay gated. In the Access app, add a policy with
 action **Bypass** scoped to those paths — or configure them as a separate
-unprotected application on the same hostname.
+unprotected application on the same hostname. Scope the bypass by prefix, not
+by exact path: `/.well-known/oauth-protected-resource/api/mcp` has to be
+reachable too, and a rule matching only the bare path will let discovery fail
+at the first request.
 
 ## Transports
 

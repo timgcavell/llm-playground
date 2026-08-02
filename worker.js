@@ -218,11 +218,29 @@ export default {
     // Discovery and token exchange must be reachable without a session: a
     // client that doesn't have a token yet cannot be asked to present one.
     // These need an Access bypass policy on the deployed app — see the README.
-    if (url.pathname === "/.well-known/oauth-protected-resource") {
+    //
+    // RFC 9728 locates a resource's metadata by inserting the well-known
+    // segment *before* the resource's path, so a resource at /api/mcp is
+    // described at /.well-known/oauth-protected-resource/api/mcp. Both that
+    // and the bare form are served; a real client asks for the first.
+    if (
+      url.pathname === "/.well-known/oauth-protected-resource" ||
+      url.pathname === `/.well-known/oauth-protected-resource${oauth.RESOURCE_PATH}`
+    ) {
       return oauth.protectedResourceMetadata(origin);
     }
-    if (url.pathname === "/.well-known/oauth-authorization-server") {
+    if (
+      url.pathname === "/.well-known/oauth-authorization-server" ||
+      url.pathname === `/.well-known/oauth-authorization-server${oauth.RESOURCE_PATH}`
+    ) {
       return oauth.authorizationServerMetadata(origin);
+    }
+    // Anything else under this prefix must 404 rather than fall through to the
+    // SPA below. Answering a discovery request with the app shell returns HTML
+    // and a 200, which a client reads as success and then cannot parse — the
+    // failure mode that hides itself.
+    if (url.pathname.startsWith("/.well-known/oauth")) {
+      return jsonResponse({ error: "not_found" }, 404);
     }
     if (url.pathname === "/oauth/register") return oauth.register(request, env);
     if (url.pathname === "/oauth/token") return oauth.token(request, env);
