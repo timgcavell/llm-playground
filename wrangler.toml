@@ -20,7 +20,7 @@ not_found_handling = "single-page-application"
 # .dev.vars, which is untracked and never deployed.
 [vars]
 CF_ACCESS_TEAM_DOMAIN = "timgcavell.cloudflareaccess.com"
-CF_ACCESS_AUD = ""
+CF_ACCESS_AUD = "0801839dd86b96a2e167a36ea8002f6a3c5da56d61bd826fad4f8e1734855c63"
 
 # Provider API keys are secrets, never vars — they must not live in this file:
 #   wrangler secret put ANTHROPIC_API_KEY
