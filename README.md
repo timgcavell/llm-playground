@@ -177,6 +177,22 @@ the tool result is prefixed with a note saying so. Treat that as mitigation,
 not a guarantee: a page that tells the model to fetch something else may well
 get it to try.
 
+### Authenticated fetches
+
+`fetch_url` can attach a credential for specific hosts — currently a GitHub
+token (`GITHUB_API_KEY`) for `api.github.com` and `raw.githubusercontent.com`,
+which lets the model read private repos and skip the unauthenticated rate
+limit. The `CREDENTIALS` table in `worker/tools.js` maps each secret to the
+hosts it may be sent to; adding an API is one entry plus one secret.
+
+The model picks the URLs, so scoping is what keeps the token from being handed
+to an arbitrary host. Redirects are followed manually with the credential
+decision remade per hop — `redirect: "follow"` would carry the header wherever
+the chain led, so an authenticated host answering with a redirect elsewhere
+would exfiltrate the token. Authenticated results say `Authenticated: GitHub`
+in the transcript, and the tool description names the authenticated hosts so
+the model knows a private repo is reachable.
+
 ## Transports
 
 Two ways to run a turn, chosen by a checkbox in the settings panel. Both carry

@@ -3,7 +3,7 @@ import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
 import { handleSocket, isUpgrade } from "./worker/socket.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
-import { availableTools } from "./worker/tools.js";
+import { CREDENTIALS, availableTools } from "./worker/tools.js";
 
 // The browser never holds a provider API key. It posts a normalized chat
 // request here; the Worker attaches the key from its secrets, runs the
@@ -39,6 +39,13 @@ function buildToolContext(env, url, owner) {
   return {
     selfHost: url ? url.hostname : null,
     search,
+    // Headers are built here so the raw keys never enter the tool context —
+    // a tool sees "what to send to which hosts", not the key ring.
+    credentials: CREDENTIALS.filter((c) => env[c.envVar]).map((c) => ({
+      label: c.label,
+      hosts: c.hosts,
+      headers: c.header(env[c.envVar]),
+    })),
     // Notes are keyed by the Access identity, so the memory tools are only
     // available once we know who is asking.
     memory: env.MEMORY && owner ? { kv: env.MEMORY, owner } : null,
