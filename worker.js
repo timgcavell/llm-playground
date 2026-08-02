@@ -253,20 +253,14 @@ export default {
       return oauth.authorize(request, env, identity.email, origin);
     }
 
-    // The MCP endpoint accepts either a delegated bearer token or an Access
-    // session. A bearer token carries scopes; an Access session is the account
-    // holder and carries none, meaning no restriction.
+    // MCP is OAuth-only. Access cannot gate this path — it answers a bearer
+    // token with a login redirect, which is a page no MCP client can read —
+    // so it is bypassed there and the Worker is the sole authority. That also
+    // means every caller arrives with scopes: there is no unscoped door.
     if (url.pathname === "/api/mcp") {
-      const bearer = request.headers.get("authorization");
-      if (bearer) {
-        const grant = await oauth.verifyBearer(request, env, origin);
-        if (!grant) return oauth.unauthorized(origin, "Invalid or expired access token");
-        return handleMcp(request, buildToolContext(env, url, grant.identity), grant.scopes);
-      }
-      const identity = await authenticate(request, env);
-      // Steer a browser-less client toward OAuth rather than a login redirect.
-      if (identity.error) return oauth.unauthorized(origin);
-      return handleMcp(request, buildToolContext(env, url, identity.email));
+      const grant = await oauth.verifyBearer(request, env, origin);
+      if (!grant) return oauth.unauthorized(origin);
+      return handleMcp(request, buildToolContext(env, url, grant.identity), grant.scopes);
     }
 
     if (url.pathname.startsWith("/api/")) {

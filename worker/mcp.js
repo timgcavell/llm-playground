@@ -15,12 +15,11 @@
 import { availableTools, runTool } from "./tools.js";
 
 // What this caller may reach: configuration decides which tools exist, and
-// the granted scopes decide which of those are visible. A scope-less caller
-// (Access service token, browser session) gets everything — it is already the
-// account holder, not a delegate.
+// the granted scopes decide which of those are visible. Scopes are required
+// rather than optional — an omitted list means nothing is permitted, so a
+// caller can never reach the registry by failing to present a grant.
 function permittedTools(toolContext, scopes) {
-  const tools = availableTools(toolContext);
-  return scopes ? tools.filter((tool) => scopes.includes(tool.scope)) : tools;
+  return availableTools(toolContext).filter((tool) => (scopes ?? []).includes(tool.scope));
 }
 
 // Versions of the spec this shape satisfies. Echo the client's if we know it,
@@ -45,7 +44,7 @@ function failure(id, code, message) {
 
 // Dispatch one JSON-RPC message. Returns the response object, or null for
 // notifications, which get an acknowledgement but no body.
-export async function dispatch(message, toolContext, scopes = null) {
+export async function dispatch(message, toolContext, scopes) {
   if (
     typeof message !== "object" ||
     message === null ||
@@ -109,7 +108,7 @@ export async function dispatch(message, toolContext, scopes = null) {
   }
 }
 
-export async function handleMcp(request, toolContext, scopes = null) {
+export async function handleMcp(request, toolContext, scopes) {
   if (request.method !== "POST") {
     // No server-initiated stream and no sessions to delete — both optional.
     return new Response(null, { status: 405, headers: { allow: "POST" } });

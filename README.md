@@ -251,31 +251,22 @@ refused is a successful call whose result carries `isError` — clients treat
 the two differently. There is no human in the loop on this path, so
 approval-gated tools behave as on SSE: they run, and stay narrow by design.
 
-Locally (`wrangler dev`, stub identity):
+**MCP is OAuth-only**, and Cloudflare Access must bypass `/api/mcp`. Access
+answers a bearer token with a login redirect — a page no MCP client can read —
+so it cannot gate this path. The Worker is the sole authority there instead,
+which is stricter than Access was: it validates an opaque token against KV,
+checks the audience, and enforces per-tool scopes. Every caller therefore
+arrives with a grant; there is no unscoped door.
+
+Add a server by URL alone — the 401 challenge starts the flow:
 
 ```bash
-claude mcp add --transport http playground http://localhost:8787/api/mcp
+claude mcp add --transport http playground https://llm.timgcavell.com/api/mcp
 ```
 
-The deployed endpoint sits behind Cloudflare Access, which a non-interactive
-client satisfies with a [service token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)
-rather than a browser login. Create one in Zero Trust, allow it in the Access
-app's policy, and pass its headers:
+### How authorization works
 
-```bash
-claude mcp add --transport http playground https://llm.timgcavell.com/api/mcp \
-  --header "CF-Access-Client-Id: <id>.access" \
-  --header "CF-Access-Client-Secret: <secret>"
-```
-
-Service-token JWTs carry a `common_name` claim instead of `email`;
-`authenticate()` accepts either, so a token gets its own memory namespace the
-way a person does.
-
-### OAuth (for clients that can't set headers)
-
-Service tokens only work for clients that let you set request headers — hosted
-MCP clients don't, and they only speak OAuth. `worker/oauth.js` is an OAuth 2.1
+`worker/oauth.js` is an OAuth 2.1
 authorization server and resource server for the MCP endpoint: discovery
 (RFC 9728 + RFC 8414), dynamic client registration (RFC 7591), authorization
 code with PKCE, and refresh.
@@ -333,8 +324,9 @@ reads as success and then cannot parse.
 **Deploying this needs an Access bypass for the unauthenticated paths.** A
 client with no token can't be asked to present one, so `/.well-known/*`,
 `/oauth/register`, and `/oauth/token` must be reachable without a session,
-while `/oauth/authorize` must stay gated. In the Access app, add a policy with
-action **Bypass** scoped to those paths — or configure them as a separate
+while `/oauth/authorize` must stay gated — that is where identity comes from.
+`/api/mcp` needs the bypass too, for the reason above. In the Access app, add a
+policy with action **Bypass** scoped to those paths — or configure them as a separate
 unprotected application on the same hostname. Scope the bypass by prefix, not
 by exact path: `/.well-known/oauth-protected-resource/api/mcp` has to be
 reachable too, and a rule matching only the bare path will let discovery fail
