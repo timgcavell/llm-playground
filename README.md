@@ -116,6 +116,7 @@ Tools are off by default; the settings panel turns them on.
 | `get_current_time` | The current date and time, optionally in an IANA zone. | — |
 | `ask_model` | Puts a one-off question to a different model and returns its answer. | a second provider key |
 | `save_memory` / `read_memory` / `list_memories` / `delete_memory` | Notes that persist across conversations, in Workers KV. | the `MEMORY` KV binding |
+| `github_write_file` / `github_open_pr` | Commit one file to a branch; open a PR to the default branch. | `GITHUB_API_KEY` |
 
 Availability follows configuration, the same way providers do: a tool whose
 backing key is missing is never offered to the model, rather than being offered
@@ -192,6 +193,20 @@ the chain led, so an authenticated host answering with a redirect elsewhere
 would exfiltrate the token. Authenticated results say `Authenticated: GitHub`
 in the transcript, and the tool description names the authenticated hosts so
 the model knows a private repo is reachable.
+
+### Writing to GitHub
+
+The same token backs two write tools. `github_write_file` commits one file per
+call to a branch, creating the branch from the default branch when it doesn't
+exist; `github_open_pr` opens a pull request. Reads go through `fetch_url`.
+
+The guardrail is that **the default branch is refused outright** — there is no
+way to ask for a direct commit to it. The model proposes on a branch, and the
+human reviews and merges in GitHub, where the diff view is. Everything these
+tools can do is undoable from there: delete the branch, close the PR. Both are
+approval-gated on the socket transport, and the token's own scopes (a
+fine-grained PAT with Contents and Pull requests read/write, ideally limited to
+chosen repositories) bound the blast radius regardless of what the tools allow.
 
 ## Transports
 

@@ -46,6 +46,10 @@ function buildToolContext(env, url, owner) {
       hosts: c.hosts,
       headers: c.header(env[c.envVar]),
     })),
+    // The same token also backs the GitHub write tools.
+    github: env.GITHUB_API_KEY
+      ? { headers: { authorization: `Bearer ${env.GITHUB_API_KEY}` } }
+      : null,
     // Notes are keyed by the Access identity, so the memory tools are only
     // available once we know who is asking.
     memory: env.MEMORY && owner ? { kv: env.MEMORY, owner } : null,

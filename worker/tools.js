@@ -461,6 +461,170 @@ async function deleteMemory(input, context) {
   return { ok: true, content: `Deleted "${key}" (${existing.length} characters).` };
 }
 
+// ---------- GitHub writes ----------
+//
+// Two tools that let the model change code: commit one file to a branch, and
+// open a pull request. The guardrail is that the default branch is refused
+// outright — the model proposes on a branch, the human reviews and merges in
+// GitHub. Both are approval-gated on the socket transport, and everything they
+// can do is undoable there (delete the branch, close the PR).
+
+const GITHUB_API = "https://api.github.com";
+const MAX_FILE_CHARS = 100_000;
+
+const REPO_RULE = 'Repositories are named "owner/name".';
+
+function normalizeRepo(raw) {
+  const repo = typeof raw === "string" ? raw.trim() : "";
+  return /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo : null;
+}
+
+function normalizeRepoPath(raw) {
+  const path = typeof raw === "string" ? raw.trim().replace(/^\/+/, "") : "";
+  if (!path || path.length > 500) return null;
+  if (path.split("/").some((part) => part === "" || part === "." || part === "..")) return null;
+  return path;
+}
+
+function encodeRepoPath(path) {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+// btoa needs a binary string; going through TextEncoder keeps non-ASCII right.
+function toBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function githubRequest(context, method, path, body) {
+  const response = await fetch(`${GITHUB_API}${path}`, {
+    method,
+    headers: {
+      ...context.github.headers,
+      "user-agent": "llm-playground (Cloudflare Worker; +https://llm.timgcavell.com)",
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  const data = response.status === 204 ? null : await response.json().catch(() => null);
+  return { status: response.status, ok: response.ok, data };
+}
+
+function githubError(step, result) {
+  const detail = result.data?.message || `HTTP ${result.status}`;
+  return { ok: false, content: `${step} failed: ${detail}` };
+}
+
+async function githubWriteFile(input, context) {
+  const repo = normalizeRepo(input?.repo);
+  if (!repo) return { ok: false, content: `Refused: invalid repository. ${REPO_RULE}` };
+  const path = normalizeRepoPath(input?.path);
+  if (!path) return { ok: false, content: "Refused: invalid file path." };
+  const branch = typeof input?.branch === "string" ? input.branch.trim() : "";
+  if (!branch || branch.length > 200) return { ok: false, content: "Refused: a branch name is required." };
+  const message = typeof input?.message === "string" ? input.message.trim() : "";
+  if (!message) return { ok: false, content: "Refused: a commit message is required." };
+  const content = typeof input?.content === "string" ? input.content : "";
+  if (content.length > MAX_FILE_CHARS) {
+    return { ok: false, content: `Refused: files are limited to ${MAX_FILE_CHARS} characters.` };
+  }
+
+  const meta = await githubRequest(context, "GET", `/repos/${repo}`);
+  if (!meta.ok) return githubError(`Looking up ${repo}`, meta);
+  const defaultBranch = meta.data.default_branch;
+
+  // The guardrail: no direct commits to the default branch, ever. Changes
+  // land as a PR that the human merges.
+  if (branch === defaultBranch) {
+    return {
+      ok: false,
+      content:
+        `Refused: "${branch}" is the default branch of ${repo}. Commit to another ` +
+        "branch and open a pull request with github_open_pr instead.",
+    };
+  }
+
+  // Create the branch from the default branch if it doesn't exist yet.
+  let createdBranch = false;
+  const ref = await githubRequest(context, "GET", `/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+  if (ref.status === 404) {
+    const base = await githubRequest(
+      context,
+      "GET",
+      `/repos/${repo}/git/ref/heads/${encodeURIComponent(defaultBranch)}`
+    );
+    if (!base.ok) return githubError(`Reading ${defaultBranch}`, base);
+    const make = await githubRequest(context, "POST", `/repos/${repo}/git/refs`, {
+      ref: `refs/heads/${branch}`,
+      sha: base.data.object.sha,
+    });
+    if (!make.ok) return githubError(`Creating branch ${branch}`, make);
+    createdBranch = true;
+  } else if (!ref.ok) {
+    return githubError(`Reading branch ${branch}`, ref);
+  }
+
+  // Updating an existing file needs its current sha; a 404 means a new file.
+  const existing = await githubRequest(
+    context,
+    "GET",
+    `/repos/${repo}/contents/${encodeRepoPath(path)}?ref=${encodeURIComponent(branch)}`
+  );
+  if (existing.ok && Array.isArray(existing.data)) {
+    return { ok: false, content: `Refused: ${path} is a directory.` };
+  }
+  const sha = existing.ok ? existing.data?.sha : undefined;
+
+  const put = await githubRequest(context, "PUT", `/repos/${repo}/contents/${encodeRepoPath(path)}`, {
+    message,
+    content: toBase64(content),
+    branch,
+    ...(sha ? { sha } : {}),
+  });
+  if (!put.ok) return githubError(`Committing ${path}`, put);
+
+  const commit = put.data?.commit?.sha?.slice(0, 7) ?? "?";
+  return {
+    ok: true,
+    content:
+      `${sha ? "Updated" : "Created"} ${path} on ${repo}@${branch}` +
+      `${createdBranch ? ` (branch created from ${defaultBranch})` : ""}. Commit ${commit}.`,
+  };
+}
+
+async function githubOpenPr(input, context) {
+  const repo = normalizeRepo(input?.repo);
+  if (!repo) return { ok: false, content: `Refused: invalid repository. ${REPO_RULE}` };
+  const head = typeof input?.branch === "string" ? input.branch.trim() : "";
+  if (!head) return { ok: false, content: "Refused: a branch name is required." };
+  const title = typeof input?.title === "string" ? input.title.trim() : "";
+  if (!title) return { ok: false, content: "Refused: a title is required." };
+  const body = typeof input?.body === "string" ? input.body : "";
+
+  const meta = await githubRequest(context, "GET", `/repos/${repo}`);
+  if (!meta.ok) return githubError(`Looking up ${repo}`, meta);
+
+  const pr = await githubRequest(context, "POST", `/repos/${repo}/pulls`, {
+    title,
+    head,
+    base: meta.data.default_branch,
+    body,
+  });
+  if (!pr.ok) {
+    // 422 usually means "already exists" or "no commits between" — the
+    // message is worth passing through verbatim.
+    const detail = pr.data?.errors?.[0]?.message || pr.data?.message || `HTTP ${pr.status}`;
+    return { ok: false, content: `Opening the pull request failed: ${detail}` };
+  }
+
+  return { ok: true, content: `Opened pull request #${pr.data.number}: ${pr.data.html_url}` };
+}
+
 // ---------- Registry ----------
 
 const TOOLS = {
@@ -563,6 +727,56 @@ const TOOLS = {
     }),
     run: askModel,
     summarize: (input) => `${input?.provider ?? "?"}${input?.model ? `/${input.model}` : ""}`,
+  },
+
+  github_write_file: {
+    available: (context) => Boolean(context.github),
+    needsApproval: true,
+    describe: () => ({
+      description:
+        "Create or update one file in a GitHub repository, as a commit on a branch. " +
+        "The default branch is refused — commit to a feature branch (created from the " +
+        "default branch automatically if it doesn't exist) and then open a pull request " +
+        "with github_open_pr. One file per call; call it repeatedly for multi-file " +
+        "changes, reusing the same branch. Read files first via fetch_url " +
+        "(raw.githubusercontent.com, or the api.github.com contents API).",
+      schema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: 'The repository, as "owner/name".' },
+          branch: { type: "string", description: "The branch to commit to. Never the default branch." },
+          path: { type: "string", description: "File path within the repository." },
+          content: { type: "string", description: "The complete new contents of the file." },
+          message: { type: "string", description: "The commit message." },
+        },
+        required: ["repo", "branch", "path", "content", "message"],
+      },
+    }),
+    run: githubWriteFile,
+    summarize: (input) => `${input?.repo ?? "?"} ${input?.branch ?? "?"}:${input?.path ?? "?"}`,
+  },
+
+  github_open_pr: {
+    available: (context) => Boolean(context.github),
+    needsApproval: true,
+    describe: () => ({
+      description:
+        "Open a pull request from a branch to the repository's default branch. Use it " +
+        "after committing changes with github_write_file, so the changes can be " +
+        "reviewed and merged.",
+      schema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: 'The repository, as "owner/name".' },
+          branch: { type: "string", description: "The branch with the changes." },
+          title: { type: "string", description: "Pull request title." },
+          body: { type: "string", description: "Optional pull request description." },
+        },
+        required: ["repo", "branch", "title"],
+      },
+    }),
+    run: githubOpenPr,
+    summarize: (input) => `${input?.repo ?? "?"} ${input?.branch ?? "?"}`,
   },
 
   save_memory: {
