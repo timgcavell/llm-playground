@@ -240,8 +240,8 @@ function consentPage(client, scopes, identity, params) {
   <h1>Authorize ${escapeHtml(client.client_name)}</h1>
   <p class="who">Signed in as ${escapeHtml(identity)}. This grants access to your
      llm-playground tools until you revoke it.</p>
-  <ul>${rows}</ul>
   <form method="POST" action="/oauth/authorize">
+    <ul>${rows}</ul>
     ${hidden}
     <button class="approve" type="submit" name="decision" value="approve">Approve</button>
     <button class="deny" type="submit" name="decision" value="deny">Deny</button>
@@ -333,6 +333,12 @@ export async function authorize(request, env, identity, origin) {
   // Nothing ticked is a refusal, not an empty grant — a token that can do
   // nothing would look like success to the client.
   if (form.get("decision") !== "approve" || granted.length === 0) {
+    audit("refused", {
+      error: "access_denied",
+      description: form.get("decision") === "approve" ? "approved with no scopes ticked" : "denied",
+      client_id: client.client_id,
+      identity,
+    });
     target.searchParams.set("error", "access_denied");
     return Response.redirect(target.href, 302);
   }
