@@ -93,14 +93,9 @@ export const PROVIDERS = {
     keyVar: "GEMINI_API_KEY",
     defaultCaps: { temperature: true, thinking: false },
     models: [
-      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", temperature: true, thinking: true },
-      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", temperature: true, thinking: true },
-      {
-        id: "gemini-2.5-flash-lite",
-        label: "Gemini 2.5 Flash Lite",
-        temperature: true,
-        thinking: false,
-      },
+      { id: "gemini-flash-latest", label: "Gemini Flash Latest", temperature: true, thinking: true },
+      { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", temperature: true, thinking: true },
+      { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite", temperature: true, thinking: false },
     ],
 
     request({ key, model, caps, system, messages, temperature, maxTokens }) {
