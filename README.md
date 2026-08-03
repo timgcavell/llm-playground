@@ -300,6 +300,11 @@ Choices worth knowing, since they are what the exercise was for:
 
 - **PKCE S256 required, no client secrets.** A secret a desktop client keeps in
   a config file protects nothing; public client + PKCE is the honest shape.
+- **The consent screen names the destination.** Registration is open, as the
+  spec requires, so `client_name` is chosen by whoever registered the client
+  and proves nothing — a hostile client can call itself "Claude". The screen
+  therefore shows the host the code will actually be sent to, which is the part
+  an attacker cannot fake, since it must match a registered redirect URI.
 - **Tokens are opaque and stored only as SHA-256 digests.** A dump of the KV
   namespace yields no working credentials.
 - **Authorization codes burn on any exchange attempt**, successful or not — a

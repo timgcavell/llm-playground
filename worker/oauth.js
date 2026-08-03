@@ -188,7 +188,7 @@ function escapeHtml(value) {
 // blanket access to "your tools" — and each one can be declined on its own,
 // because "all of this or nothing" is not really a choice. A client asks for
 // what it would like; the person decides what it gets.
-function consentPage(client, scopes, identity, params) {
+function consentPage(client, scopes, identity, params, redirectUri) {
   const rows = scopes
     .map(
       (scope) =>
@@ -219,6 +219,9 @@ function consentPage(client, scopes, identity, params) {
   main { max-width:32em; margin:0 auto; }
   h1 { font-size:1.1rem; letter-spacing:.05em; }
   .who { color:var(--muted); font-size:.85rem; }
+  .dest { font-size:.85rem; border-left:3px solid var(--accent); padding:.4rem .7rem;
+          background:var(--card); }
+  .dest strong { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   ul { list-style:none; padding:0; margin:1.2rem 0; display:grid; gap:.5rem; }
   li { background:var(--card); border:1px solid var(--border); border-radius:3px; }
   li label { display:grid; grid-template-columns:auto 1fr; gap:.15rem .6rem;
@@ -240,6 +243,9 @@ function consentPage(client, scopes, identity, params) {
   <h1>Authorize ${escapeHtml(client.client_name)}</h1>
   <p class="who">Signed in as ${escapeHtml(identity)}. This grants access to your
      llm-playground tools until you revoke it.</p>
+  <p class="dest">Access will be sent to <strong>${escapeHtml(new URL(redirectUri).host)}</strong>.
+     Only approve if you started this from there — the name above is chosen by
+     whoever registered the client, and is not proof of who they are.</p>
   <form method="POST" action="/oauth/authorize">
     <ul>${rows}</ul>
     ${hidden}
@@ -317,7 +323,7 @@ export async function authorize(request, env, identity, origin) {
   const { client, scopes, redirectUri } = validated;
 
   if (request.method === "GET") {
-    return new Response(consentPage(client, scopes, identity, params), {
+    return new Response(consentPage(client, scopes, identity, params, redirectUri), {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
   }
