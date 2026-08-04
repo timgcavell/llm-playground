@@ -337,6 +337,23 @@ under `/.well-known/oauth` returns 404 rather than falling through to the SPA:
 answering discovery with the app shell means HTML and a 200, which a client
 reads as success and then cannot parse.
 
+Consent is remembered. Once a client has been approved, a later request for
+the same scopes — or fewer — skips the screen and goes straight to a code;
+asking for anything *beyond* what was granted brings it back, because that is a
+new decision rather than a repeat of an old one. Re-approving updates the
+existing grant instead of adding a second, so the list below holds one row per
+application rather than one per connection. Revoking is what takes consent
+back.
+
+Remembering consent is also why refresh rotation is tracked per *chain* rather
+than per grant: one grant can be held by two connections at once, and a single
+pointer would make the second one's rotation look like a replay of the first.
+Reuse within a chain still revokes the whole grant.
+
+Note that a client doing fresh dynamic registration on every connection gets a
+new `client_id` each time and so will never match a remembered grant — which is
+what the registrations in this project's own logs were doing.
+
 `/connections` lists everything currently authorized — client, destination
 host, scopes, when it was approved and last used — with a Revoke button, and
 `/oauth/revoke` implements RFC 7009 for clients handing back their own tokens.

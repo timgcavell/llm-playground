@@ -323,7 +323,34 @@ export async function authorize(request, env, identity, origin) {
 
   const { client, scopes, redirectUri } = validated;
 
+  const existing = await findGrantForClient(env, identity, client.client_id);
+
   if (request.method === "GET") {
+    // Consent already given for this client, covering everything now asked
+    // for: don't ask again. A request for anything *beyond* what was granted
+    // still goes to the screen — that is a new decision, not a repeat of an
+    // old one. Revoking at /connections is what takes the answer back.
+    if (existing && scopes.every((scope) => existing.scopes.includes(scope))) {
+      audit("reused", {
+        client_id: client.client_id,
+        identity,
+        scopes,
+        grant_id: existing.grant_id,
+      });
+      const target = new URL(redirectUri);
+      if (params.state) target.searchParams.set("state", params.state);
+      return redirectWithCode(env, {
+        target,
+        grantId: existing.grant_id,
+        client,
+        redirectUri,
+        params,
+        scopes,
+        identity,
+        origin,
+      });
+    }
+
     return new Response(consentPage(client, scopes, identity, params, redirectUri), {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
@@ -353,8 +380,10 @@ export async function authorize(request, env, identity, origin) {
   }
 
   // The grant is created here, at the moment of consent, rather than at token
-  // issuance: this is where the person actually decided.
-  const grantId = crypto.randomUUID();
+  // issuance: this is where the person actually decided. Approving again for a
+  // client that already has one updates it rather than adding a second, so
+  // /connections lists one row per application instead of one per connection.
+  const grantId = existing?.grant_id ?? crypto.randomUUID();
   await env.OAUTH.put(
     grantKey(identity, grantId),
     JSON.stringify({
@@ -364,12 +393,27 @@ export async function authorize(request, env, identity, origin) {
       redirect_host: new URL(redirectUri).host,
       identity,
       scopes: granted,
-      created_at: new Date().toISOString(),
-      last_token_at: null,
-      current_refresh: null,
+      created_at: existing?.created_at ?? new Date().toISOString(),
+      last_token_at: existing?.last_token_at ?? null,
     })
   );
 
+  audit("granted", { client_id: client.client_id, identity, scopes: granted, grant_id: grantId });
+  return redirectWithCode(env, {
+    target,
+    grantId,
+    client,
+    redirectUri,
+    params,
+    scopes: granted,
+    identity,
+    origin,
+  });
+}
+
+// Mint the authorization code and bounce back to the client. Reached from two
+// places: a fresh approval, and a remembered one that skipped the screen.
+async function redirectWithCode(env, { target, grantId, client, redirectUri, params, scopes, identity, origin }) {
   const code = randomToken("pgu");
   await env.OAUTH.put(
     `code:${await sha256(code)}`,
@@ -378,14 +422,13 @@ export async function authorize(request, env, identity, origin) {
       client_id: client.client_id,
       redirect_uri: redirectUri,
       code_challenge: params.code_challenge,
-      scopes: granted,
+      scopes,
       identity,
       resource: resourceOf(origin),
     }),
     { expirationTtl: CODE_TTL }
   );
 
-  audit("granted", { client_id: client.client_id, identity, scopes: granted, grant_id: grantId });
   target.searchParams.set("code", code);
   return Response.redirect(target.href, 302);
 }
@@ -414,6 +457,20 @@ export async function listGrants(env, identity) {
   return grants.filter(Boolean).sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+// A grant can be held by more than one connection at a time — the same client
+// authorized twice, or two devices. Each gets its own refresh chain, so
+// rotating one does not make the other look like a replay. Reuse *within* a
+// chain still revokes the whole grant, which is the standard reading: if a
+// token was stolen we cannot tell which copy the thief holds.
+function chainKey(chainId) {
+  return `chain:${chainId}`;
+}
+
+export async function findGrantForClient(env, identity, clientId) {
+  const grants = await listGrants(env, identity);
+  return grants.find((grant) => grant.client_id === clientId) ?? null;
+}
+
 export async function revokeGrant(env, identity, grantId) {
   const key = grantKey(identity, grantId);
   const stored = await env.OAUTH.get(key);
@@ -427,13 +484,14 @@ export async function revokeGrant(env, identity, grantId) {
 
 // ---------- token ----------
 
-async function issueTokens(env, grant) {
+async function issueTokens(env, grant, chainId = crypto.randomUUID()) {
   const accessToken = randomToken("pgat");
   const refreshToken = randomToken("pgrt");
   const refreshDigest = await sha256(refreshToken);
 
   const reference = {
     grant_id: grant.grant_id,
+    chain_id: chainId,
     client_id: grant.client_id,
     identity: grant.identity,
     scopes: grant.scopes,
@@ -447,11 +505,16 @@ async function issueTokens(env, grant) {
     expirationTtl: REFRESH_TTL,
   });
 
-  // The grant remembers which refresh token is the live one. Any older one
+  // The chain remembers which refresh token is the live one. Any older one
   // presented later is a replay, not a mistake — see the refresh branch.
+  await env.OAUTH.put(
+    chainKey(chainId),
+    JSON.stringify({ grant_id: grant.grant_id, identity: grant.identity, current_refresh: refreshDigest }),
+    { expirationTtl: REFRESH_TTL }
+  );
+
   const record = JSON.parse((await env.OAUTH.get(grantKey(grant.identity, grant.grant_id))) ?? "null");
   if (record) {
-    record.current_refresh = refreshDigest;
     record.last_token_at = new Date().toISOString();
     await env.OAUTH.put(grantKey(grant.identity, grant.grant_id), JSON.stringify(record));
   }
@@ -553,7 +616,13 @@ export async function token(request, env) {
     // made-up one. Only two things produce it: a client that lost the race, or
     // someone replaying a stolen copy. Both are answered the same way — revoke
     // the whole grant, because we cannot tell which token the thief holds.
-    if (grant.current_refresh && grant.current_refresh !== digest) {
+    const chain = JSON.parse((await env.OAUTH.get(chainKey(record.chain_id))) ?? "null");
+    if (!chain) {
+      return oauthError("invalid_grant", "That refresh chain has expired", 400, {
+        grant_id: record.grant_id,
+      });
+    }
+    if (chain.current_refresh !== digest) {
       await revokeGrant(env, record.identity, record.grant_id);
       return oauthError("invalid_grant", "Refresh token reuse detected; the grant was revoked", 400, {
         grant_id: record.grant_id,
@@ -570,8 +639,8 @@ export async function token(request, env) {
     }
 
     // The superseded refresh token is not deleted; issueTokens moves the
-    // grant's pointer to the new one, which is what makes replay detectable.
-    return issueTokens(env, record);
+    // chain's pointer to the new one, which is what makes replay detectable.
+    return issueTokens(env, record, record.chain_id);
   }
 
   return oauthError("unsupported_grant_type", `Unsupported grant_type: ${grantType}`);
