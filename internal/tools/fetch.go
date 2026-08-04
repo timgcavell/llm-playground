@@ -107,13 +107,15 @@ func NewFetchClient() *http.Client {
 	}
 }
 
-func checkURL(target *url.URL, selfHost string) string {
+func checkURL(target *url.URL, selfHosts []string) string {
 	if target.Scheme != "http" && target.Scheme != "https" {
 		return fmt.Sprintf("Refused: only http and https URLs can be fetched (got %q).", target.Scheme)
 	}
 	host := strings.ToLower(target.Hostname())
-	if selfHost != "" && host == strings.ToLower(selfHost) {
-		return "Refused: that is this application's own address."
+	for _, self := range selfHosts {
+		if self != "" && host == strings.ToLower(self) {
+			return "Refused: that is this application's own address."
+		}
 	}
 	if isPrivateHost(host) {
 		return "Refused: private, loopback, and link-local addresses cannot be fetched."
@@ -287,7 +289,7 @@ func fetchURL(ctx context.Context, input map[string]any, env *Env) Result {
 	// authenticated host answering with a redirect elsewhere would exfiltrate
 	// the token.
 	for hop := 0; ; hop++ {
-		if refusal := checkURL(target, env.SelfHost); refusal != "" {
+		if refusal := checkURL(target, env.SelfHosts); refusal != "" {
 			return refuse("%s", refusal)
 		}
 

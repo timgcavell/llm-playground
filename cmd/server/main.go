@@ -88,6 +88,7 @@ type server struct {
 	verifier     *access.Verifier
 	memoryKV     *kv.Store
 	publicOrigin string
+	selfHosts    []string
 	staticDir    string
 	localDev     bool
 }
@@ -111,8 +112,12 @@ func newServer() (*server, error) {
 			envOr("CF_ACCESS_AUD", ""),
 		),
 		publicOrigin: envOr("PUBLIC_ORIGIN", ""),
-		staticDir:    envOr("STATIC_DIR", "./public"),
-		localDev:     os.Getenv("LOCAL_DEV") == "1",
+		// Every hostname this service answers on. Cloud Run's own URL stays
+		// reachable no matter what is put in front of it, so listing only the
+		// public origin would leave the other address fetchable.
+		selfHosts: splitHosts(envOr("PUBLIC_ORIGIN", ""), os.Getenv("SELF_HOSTS")),
+		staticDir: envOr("STATIC_DIR", "./public"),
+		localDev:  os.Getenv("LOCAL_DEV") == "1",
 	}
 
 	srv.runner = &agent.Runner{
@@ -142,7 +147,7 @@ func newServer() (*server, error) {
 func (s *server) toolEnv(client *http.Client, owner string) *tools.Env {
 	env := &tools.Env{
 		HTTP:             client,
-		SelfHost:         hostOf(s.publicOrigin),
+		SelfHosts:        s.selfHosts,
 		AskableProviders: s.providers.Names(),
 	}
 
@@ -221,7 +226,9 @@ func (a kvAdapter) List(ctx context.Context, prefix string, limit int) ([]string
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Not /healthz: Google Frontend answers that path itself on Cloud Run and
+	// the request never reaches the container.
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -457,6 +464,18 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func splitHosts(values ...string) []string {
+	var hosts []string
+	for _, value := range values {
+		for _, entry := range strings.Split(value, ",") {
+			if host := hostOf(strings.TrimSpace(entry)); host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
 }
 
 func hostOf(origin string) string {

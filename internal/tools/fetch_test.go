@@ -49,7 +49,7 @@ func TestCheckURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parsing %q: %v", testCase.url, err)
 		}
-		refusal := checkURL(parsed, "llm.timgcavell.com")
+		refusal := checkURL(parsed, []string{"llm.timgcavell.com"})
 		if (refusal != "") != testCase.refused {
 			t.Errorf("checkURL(%q) = %q, refused=%v want %v",
 				testCase.url, refusal, refusal != "", testCase.refused)

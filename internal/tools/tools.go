@@ -87,9 +87,11 @@ type Spec struct {
 type Env struct {
 	HTTP *http.Client
 
-	// SelfHost is this service's own hostname, refused by fetch_url so the
-	// model cannot make the server talk to itself.
-	SelfHost string
+	// SelfHosts are this service's own hostnames, refused by fetch_url so the
+	// model cannot make the server talk to itself. There is more than one:
+	// Cloud Run always answers on its run.app URL, and separately on whatever
+	// hostname is put in front of it.
+	SelfHosts []string
 
 	Credentials []Credential
 	Search      *SearchConfig
