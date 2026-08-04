@@ -345,6 +345,12 @@ existing grant instead of adding a second, so the list below holds one row per
 application rather than one per connection. Revoking is what takes consent
 back.
 
+A rotated refresh token is kept rather than deleted, but only for two days
+rather than the full thirty: replay detection has to cover a realistic theft
+window, not a token's whole lifetime. Left at the full lifetime, a connection
+refreshing hourly would keep around seven hundred dead rows alive at once,
+growing with no ceiling.
+
 Remembering consent is also why refresh rotation is tracked per *chain* rather
 than per grant: one grant can be held by two connections at once, and a single
 pointer would make the second one's rotation look like a replay of the first.

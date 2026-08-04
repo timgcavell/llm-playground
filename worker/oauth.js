@@ -34,6 +34,14 @@ import { DEFAULT_SCOPES, SCOPES } from "./tools.js";
 const CODE_TTL = 300; // seconds; a code is exchanged immediately in practice
 const ACCESS_TTL = 3600;
 const REFRESH_TTL = 30 * 24 * 3600;
+// How long a *superseded* refresh token stays readable. Rotated tokens are
+// kept rather than deleted so that presenting one is distinguishable from
+// presenting a fabrication — but that only has to cover a realistic theft
+// window, not the full refresh lifetime. At the old TTL a connection
+// refreshing hourly left ~700 dead rows alive at once, growing with no
+// ceiling. Two days is long enough to catch a replay and short enough that
+// the rows drain.
+const SUPERSEDED_REFRESH_TTL = 2 * 24 * 3600;
 
 const SCOPE_NAMES = Object.keys(SCOPES);
 
@@ -484,7 +492,7 @@ export async function revokeGrant(env, identity, grantId) {
 
 // ---------- token ----------
 
-async function issueTokens(env, grant, chainId = crypto.randomUUID()) {
+async function issueTokens(env, grant, chainId = crypto.randomUUID(), supersedes = null) {
   const accessToken = randomToken("pgat");
   const refreshToken = randomToken("pgrt");
   const refreshDigest = await sha256(refreshToken);
@@ -512,6 +520,18 @@ async function issueTokens(env, grant, chainId = crypto.randomUUID()) {
     JSON.stringify({ grant_id: grant.grant_id, identity: grant.identity, current_refresh: refreshDigest }),
     { expirationTtl: REFRESH_TTL }
   );
+
+  // Shorten the token this one replaces, rather than leaving it to sit for the
+  // full refresh lifetime. Rewriting it keeps replay detection working; only
+  // its expiry changes.
+  if (supersedes) {
+    const previous = await env.OAUTH.get(`refresh:${supersedes}`);
+    if (previous) {
+      await env.OAUTH.put(`refresh:${supersedes}`, previous, {
+        expirationTtl: SUPERSEDED_REFRESH_TTL,
+      });
+    }
+  }
 
   const record = JSON.parse((await env.OAUTH.get(grantKey(grant.identity, grant.grant_id))) ?? "null");
   if (record) {
@@ -639,8 +659,9 @@ export async function token(request, env) {
     }
 
     // The superseded refresh token is not deleted; issueTokens moves the
-    // chain's pointer to the new one, which is what makes replay detectable.
-    return issueTokens(env, record, record.chain_id);
+    // chain's pointer to the new one and shortens the old one's expiry, which
+    // is what keeps replay detectable without keeping it forever.
+    return issueTokens(env, record, record.chain_id, digest);
   }
 
   return oauthError("unsupported_grant_type", `Unsupported grant_type: ${grantType}`);
