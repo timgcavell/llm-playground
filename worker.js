@@ -244,6 +244,9 @@ export default {
     }
     if (url.pathname === "/oauth/register") return oauth.register(request, env);
     if (url.pathname === "/oauth/token") return oauth.token(request, env);
+    // A client handing back its own token needs no session, same as the
+    // exchange that issued it.
+    if (url.pathname === "/oauth/revoke") return oauth.revoke(request, env);
 
     // Consent, by contrast, is exactly where identity is needed, so it stays
     // behind Access: the token is bound to whoever is signed in.
@@ -251,6 +254,14 @@ export default {
       const identity = await authenticate(request, env);
       if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
       return oauth.authorize(request, env, identity.email, origin);
+    }
+
+    // Reviewing and revoking what has been authorized. Gated, like consent:
+    // both are decisions only the account holder gets to make.
+    if (url.pathname === "/connections") {
+      const identity = await authenticate(request, env);
+      if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
+      return oauth.connections(request, env, identity.email);
     }
 
     // MCP is OAuth-only. Access cannot gate this path — it answers a bearer

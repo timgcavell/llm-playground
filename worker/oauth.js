@@ -124,6 +124,7 @@ export function authorizationServerMetadata(origin) {
     authorization_endpoint: `${issuer}/oauth/authorize`,
     token_endpoint: `${issuer}/oauth/token`,
     registration_endpoint: `${issuer}/oauth/register`,
+    revocation_endpoint: `${issuer}/oauth/revoke`,
     scopes_supported: SCOPE_NAMES,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
@@ -351,10 +352,29 @@ export async function authorize(request, env, identity, origin) {
     return Response.redirect(target.href, 302);
   }
 
+  // The grant is created here, at the moment of consent, rather than at token
+  // issuance: this is where the person actually decided.
+  const grantId = crypto.randomUUID();
+  await env.OAUTH.put(
+    grantKey(identity, grantId),
+    JSON.stringify({
+      grant_id: grantId,
+      client_id: client.client_id,
+      client_name: client.client_name,
+      redirect_host: new URL(redirectUri).host,
+      identity,
+      scopes: granted,
+      created_at: new Date().toISOString(),
+      last_token_at: null,
+      current_refresh: null,
+    })
+  );
+
   const code = randomToken("pgu");
   await env.OAUTH.put(
     `code:${await sha256(code)}`,
     JSON.stringify({
+      grant_id: grantId,
       client_id: client.client_id,
       redirect_uri: redirectUri,
       code_challenge: params.code_challenge,
@@ -365,9 +385,44 @@ export async function authorize(request, env, identity, origin) {
     { expirationTtl: CODE_TTL }
   );
 
-  audit("granted", { client_id: client.client_id, identity, scopes: granted });
+  audit("granted", { client_id: client.client_id, identity, scopes: granted, grant_id: grantId });
   target.searchParams.set("code", code);
   return Response.redirect(target.href, 302);
+}
+
+// ---------- grants ----------
+//
+// A grant is the durable thing a person actually agreed to: this client, this
+// identity, these scopes. Tokens are disposable references to it. Without a
+// record like this there is nothing to list and nothing to revoke — deleting
+// individual token rows by hand is not revocation, it is cleanup.
+//
+// Keyed by identity so a person's grants can be listed with a prefix scan;
+// tokens carry the grant id, and a token whose grant is gone stops working
+// everywhere at once.
+
+function grantKey(identity, grantId) {
+  return `grant:${identity}:${grantId}`;
+}
+
+export async function listGrants(env, identity) {
+  const prefix = `grant:${identity}:`;
+  const listing = await env.OAUTH.list({ prefix, limit: 100 });
+  const grants = await Promise.all(
+    listing.keys.map(async (entry) => JSON.parse((await env.OAUTH.get(entry.name)) ?? "null"))
+  );
+  return grants.filter(Boolean).sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+export async function revokeGrant(env, identity, grantId) {
+  const key = grantKey(identity, grantId);
+  const stored = await env.OAUTH.get(key);
+  if (!stored) return false;
+  await env.OAUTH.delete(key);
+  // Tokens are left to expire on their own TTL. They are already dead: every
+  // check loads the grant first, so a missing grant is a refused token.
+  audit("revoked", { grant_id: grantId, identity, client_id: JSON.parse(stored).client_id });
+  return true;
 }
 
 // ---------- token ----------
@@ -375,15 +430,38 @@ export async function authorize(request, env, identity, origin) {
 async function issueTokens(env, grant) {
   const accessToken = randomToken("pgat");
   const refreshToken = randomToken("pgrt");
+  const refreshDigest = await sha256(refreshToken);
 
-  await env.OAUTH.put(`token:${await sha256(accessToken)}`, JSON.stringify(grant), {
+  const reference = {
+    grant_id: grant.grant_id,
+    client_id: grant.client_id,
+    identity: grant.identity,
+    scopes: grant.scopes,
+    resource: grant.resource,
+  };
+
+  await env.OAUTH.put(`token:${await sha256(accessToken)}`, JSON.stringify(reference), {
     expirationTtl: ACCESS_TTL,
   });
-  await env.OAUTH.put(`refresh:${await sha256(refreshToken)}`, JSON.stringify(grant), {
+  await env.OAUTH.put(`refresh:${refreshDigest}`, JSON.stringify(reference), {
     expirationTtl: REFRESH_TTL,
   });
 
-  audit("issued", { client_id: grant.client_id, identity: grant.identity, scopes: grant.scopes });
+  // The grant remembers which refresh token is the live one. Any older one
+  // presented later is a replay, not a mistake — see the refresh branch.
+  const record = JSON.parse((await env.OAUTH.get(grantKey(grant.identity, grant.grant_id))) ?? "null");
+  if (record) {
+    record.current_refresh = refreshDigest;
+    record.last_token_at = new Date().toISOString();
+    await env.OAUTH.put(grantKey(grant.identity, grant.grant_id), JSON.stringify(record));
+  }
+
+  audit("issued", {
+    client_id: grant.client_id,
+    identity: grant.identity,
+    scopes: grant.scopes,
+    grant_id: grant.grant_id,
+  });
   return Response.json({
     access_token: accessToken,
     token_type: "Bearer",
@@ -438,6 +516,7 @@ export async function token(request, env) {
     }
 
     return issueTokens(env, {
+      grant_id: record.grant_id,
       client_id: record.client_id,
       identity: record.identity,
       scopes: record.scopes,
@@ -449,13 +528,37 @@ export async function token(request, env) {
     const refresh = form.get("refresh_token");
     if (!refresh) return oauthError("invalid_request", "refresh_token is required");
 
-    const key = `refresh:${await sha256(refresh)}`;
-    const stored = await env.OAUTH.get(key);
+    const digest = await sha256(refresh);
+    const stored = await env.OAUTH.get(`refresh:${digest}`);
     if (!stored) return oauthError("invalid_grant", "Unknown or expired refresh token");
     const record = JSON.parse(stored);
 
     if (record.client_id !== form.get("client_id")) {
       return oauthError("invalid_grant", "Refresh token was issued to a different client");
+    }
+
+    // A revoked grant kills every token that references it, without having to
+    // hunt those tokens down.
+    const grant = JSON.parse(
+      (await env.OAUTH.get(grantKey(record.identity, record.grant_id))) ?? "null"
+    );
+    if (!grant) {
+      return oauthError("invalid_grant", "That authorization has been revoked", 400, {
+        grant_id: record.grant_id,
+      });
+    }
+
+    // Rotated refresh tokens are kept until they expire rather than deleted,
+    // so presenting a superseded one is distinguishable from presenting a
+    // made-up one. Only two things produce it: a client that lost the race, or
+    // someone replaying a stolen copy. Both are answered the same way — revoke
+    // the whole grant, because we cannot tell which token the thief holds.
+    if (grant.current_refresh && grant.current_refresh !== digest) {
+      await revokeGrant(env, record.identity, record.grant_id);
+      return oauthError("invalid_grant", "Refresh token reuse detected; the grant was revoked", 400, {
+        grant_id: record.grant_id,
+        client_id: record.client_id,
+      });
     }
 
     // A refresh may narrow scope but never widen it.
@@ -466,11 +569,8 @@ export async function token(request, env) {
       record.scopes = requested;
     }
 
-    // Rotate only once the request is known good. Spending the token on a
-    // rejected request would let one malformed refresh destroy a working
-    // grant — unlike an authorization code, where a failed exchange is
-    // evidence of interception and burning it is the point.
-    await env.OAUTH.delete(key);
+    // The superseded refresh token is not deleted; issueTokens moves the
+    // grant's pointer to the new one, which is what makes replay detectable.
     return issueTokens(env, record);
   }
 
@@ -488,13 +588,25 @@ export async function verifyBearer(request, env, origin) {
 
   const stored = await env.OAUTH.get(`token:${await sha256(match[1])}`);
   if (!stored) return null;
-  const grant = JSON.parse(stored);
+  const reference = JSON.parse(stored);
 
   // The audience check. A token minted for a different MCP server must not
   // work here, even if this server issued it.
-  if (grant.resource !== resourceOf(origin)) return null;
+  if (reference.resource !== resourceOf(origin)) return null;
 
-  return { identity: grant.identity, scopes: grant.scopes, clientId: grant.client_id };
+  // Revocation is enforced here: an access token is only a pointer, and a
+  // pointer to a grant that no longer exists is worth nothing. This costs one
+  // KV read per call and is what makes "Revoke" take effect immediately
+  // rather than whenever the token happens to expire.
+  const grant = await env.OAUTH.get(grantKey(reference.identity, reference.grant_id));
+  if (!grant) return null;
+
+  return {
+    identity: reference.identity,
+    scopes: reference.scopes,
+    clientId: reference.client_id,
+    grantId: reference.grant_id,
+  };
 }
 
 // The 401 that starts discovery: it tells the client where to find the
@@ -510,4 +622,116 @@ export function unauthorized(origin, description = "A bearer token is required")
       },
     }
   );
+}
+
+// ---------- revocation (RFC 7009) ----------
+
+// A client handing back a token it no longer needs. Deliberately quiet: the
+// spec requires 200 even for an unknown token, so that this endpoint cannot be
+// used to test whether a token is valid.
+export async function revoke(request, env) {
+  if (request.method !== "POST") return oauthError("invalid_request", "POST required", 405);
+  const form = await request.formData().catch(() => null);
+  if (!form) return oauthError("invalid_request", "Expected form-encoded body");
+
+  const presented = form.get("token");
+  if (presented) {
+    const hint = form.get("token_type_hint");
+    // The hint is advice, not truth — try both unless told otherwise.
+    const prefixes = hint === "refresh_token" ? ["refresh"] : hint === "access_token" ? ["token"] : ["token", "refresh"];
+    const digest = await sha256(String(presented));
+    for (const prefix of prefixes) {
+      const stored = await env.OAUTH.get(`${prefix}:${digest}`);
+      if (!stored) continue;
+      const reference = JSON.parse(stored);
+      await revokeGrant(env, reference.identity, reference.grant_id);
+      break;
+    }
+  }
+  return new Response(null, { status: 200 });
+}
+
+// ---------- connected applications ----------
+
+function connectionsPage(grants, identity, notice) {
+  const rows = grants.length
+    ? grants
+        .map((grant) => {
+          const scopes = grant.scopes
+            .map((scope) => `<code>${escapeHtml(scope)}</code>`)
+            .join(" ");
+          const used = grant.last_token_at
+            ? `last token ${escapeHtml(grant.last_token_at.slice(0, 16).replace("T", " "))} UTC`
+            : "no token issued yet";
+          return `<li>
+            <div class="head"><strong>${escapeHtml(grant.client_name)}</strong>
+              <span class="host">${escapeHtml(grant.redirect_host)}</span></div>
+            <div class="scopes">${scopes}</div>
+            <div class="when">Approved ${escapeHtml(grant.created_at.slice(0, 16).replace("T", " "))} UTC · ${used}</div>
+            <form method="POST" action="/connections">
+              <input type="hidden" name="grant_id" value="${escapeHtml(grant.grant_id)}" />
+              <button type="submit">Revoke</button>
+            </form>
+          </li>`;
+        })
+        .join("")
+    : `<li class="empty">Nothing is authorized right now.</li>`;
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connected applications</title>
+<style>
+  :root { color-scheme: light; --bg:#fdfbf5; --fg:#0b4d47; --accent:#c8621f; --muted:#6d827f;
+          --border:#ddd9cc; --card:#f7f4ea; --danger:#9d2f2f; }
+  body { margin:0; padding:2rem 1rem; font-family:Geneva,sans-serif; background:var(--bg);
+         color:var(--fg); line-height:1.5rem; }
+  main { max-width:38em; margin:0 auto; }
+  h1 { font-size:1.1rem; letter-spacing:.05em; }
+  .who { color:var(--muted); font-size:.85rem; }
+  .notice { border-left:3px solid var(--accent); background:var(--card); padding:.4rem .7rem;
+            font-size:.85rem; margin:1rem 0; }
+  ul { list-style:none; padding:0; margin:1.2rem 0; display:grid; gap:.6rem; }
+  li { background:var(--card); border:1px solid var(--border); border-radius:3px;
+       padding:.7rem .9rem; display:grid; gap:.3rem; }
+  li.empty { color:var(--muted); font-size:.9rem; }
+  .head { display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }
+  .host { color:var(--muted); font-size:.8rem;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .scopes code { color:#360c97; background:#dadfe0; padding:.1em .3em; font-size:.78rem;
+                 margin-right:.25rem; }
+  .when { color:var(--muted); font-size:.78rem; }
+  form { margin-top:.3rem; }
+  button { font:inherit; font-size:.8rem; padding:.3rem .7rem; border-radius:3px;
+           border:1px solid var(--border); background:var(--bg); color:var(--danger);
+           cursor:pointer; }
+  button:hover { border-color:var(--danger); }
+  .note { color:var(--muted); font-size:.8rem; margin-top:1.5rem; }
+</style></head>
+<body><main>
+  <h1>Connected applications</h1>
+  <p class="who">Signed in as ${escapeHtml(identity)}.</p>
+  ${notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}
+  <ul>${rows}</ul>
+  <p class="note">Revoking takes effect on the next request — an access token is only a
+     pointer to the authorization, so removing it stops every token that referenced it,
+     without waiting for one to expire.</p>
+</main></body></html>`;
+}
+
+export async function connections(request, env, identity) {
+  let notice = "";
+  if (request.method === "POST") {
+    const form = await request.formData().catch(() => null);
+    const grantId = form?.get("grant_id");
+    if (grantId) {
+      // Scoped to this identity's own keyspace, so one person cannot revoke
+      // another's grant by guessing an id.
+      const done = await revokeGrant(env, identity, String(grantId));
+      notice = done ? "Access revoked." : "That authorization was already gone.";
+    }
+  }
+  return new Response(connectionsPage(await listGrants(env, identity), identity, notice), {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }

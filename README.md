@@ -314,6 +314,17 @@ Choices worth knowing, since they are what the exercise was for:
 - **`resource` (RFC 8707) is validated on both ends.** A token minted for
   another MCP server is refused here even if this server issued it — the
   confused-deputy problem the MCP spec added resource indicators to close.
+- **Grants are the durable record, tokens are pointers to them.** Consent
+  creates a grant naming the client, identity, and scopes; every token check
+  loads it first. Revoking deletes the grant, which stops every token that
+  referenced it on the next request rather than whenever one expires. Without
+  a record like this there is nothing to list and nothing to revoke — deleting
+  token rows by hand is cleanup, not revocation.
+- **Refresh reuse revokes the whole grant.** Rotated refresh tokens are kept
+  until they expire instead of being deleted, so a superseded one is
+  distinguishable from a made-up one. Presenting it means either a client that
+  lost a race or someone replaying a stolen copy; since we cannot tell which
+  copy the thief holds, the grant goes.
 - **`PUBLIC_ORIGIN` is configured, not derived.** Clients compare the
   discovered issuer byte-for-byte, and `request.url`'s host is whatever the
   last hop said it was.
@@ -326,9 +337,16 @@ under `/.well-known/oauth` returns 404 rather than falling through to the SPA:
 answering discovery with the app shell means HTML and a 200, which a client
 reads as success and then cannot parse.
 
+`/connections` lists everything currently authorized — client, destination
+host, scopes, when it was approved and last used — with a Revoke button, and
+`/oauth/revoke` implements RFC 7009 for clients handing back their own tokens.
+Both exist because needing someone to delete KV rows by hand is the signal that
+an authorization server is missing a feature.
+
 **Deploying this needs an Access bypass for the unauthenticated paths.** A
 client with no token can't be asked to present one, so `/.well-known/*`,
-`/oauth/register`, and `/oauth/token` must be reachable without a session,
+`/oauth/register`, `/oauth/token`, and `/oauth/revoke` must be reachable
+without a session,
 while `/oauth/authorize` must stay gated — that is where identity comes from.
 `/api/mcp` needs the bypass too, for the reason above. In the Access app, add a
 policy with action **Bypass** scoped to those paths — or configure them as a separate
