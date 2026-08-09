@@ -1,7 +1,6 @@
 // Conversation and settings, kept in memory and written through to
-// localStorage so a reload picks up where the last one left off. Nothing here
-// touches the network: the Worker is stateless, and the browser resends the
-// whole conversation on every turn.
+// localStorage and Cloudflare KV via /api/settings so settings follow the user
+// across devices and browsers.
 
 const KEY = "llm-playground:v1";
 
@@ -22,6 +21,8 @@ const state = {
   messages: [],
 };
 
+let syncTimer = null;
+
 export function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || "{}");
@@ -30,15 +31,45 @@ export function load() {
   } catch {
     // Corrupt or unavailable storage just means starting fresh.
   }
+
+  // Fetch server-side settings from KV via Worker API and merge/override
+  fetchSettingsFromServer();
+
   return state;
+}
+
+async function fetchSettingsFromServer() {
+  try {
+    const res = await fetch("/api/settings");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.settings && typeof data.settings === "object") {
+      Object.assign(state.settings, data.settings);
+      save();
+      // Dispatch an event so UI controllers know settings were updated from server
+      window.dispatchEvent(new CustomEvent("settings-synced", { detail: state.settings }));
+    }
+  } catch {
+    // Offline or local dev without KV configured
+  }
 }
 
 function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    localStorage.setItem(KEY, JSON.stringify({ settings: state.settings, messages: state.messages }));
   } catch {
     // Private browsing or a full quota shouldn't break the app.
   }
+
+  // Debounce sync to server
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    fetch("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(state.settings),
+    }).catch(() => {});
+  }, 500);
 }
 
 export function settings() {
