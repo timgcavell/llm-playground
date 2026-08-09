@@ -298,38 +298,50 @@ export default {
         return jsonResponse({
           email: identity.email,
           providers: describeProviders(env),
-          tools: availableTools(buildToolContext(env, url, identity.email)).map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-          })),
+          tools: availableTools(env),
         });
       }
 
-      // Two-way transport, so tools that need confirmation can ask.
-      if (url.pathname === "/api/socket") {
-        if (!isUpgrade(request)) return jsonResponse({ error: "Expected a WebSocket upgrade" }, 426);
-        return handleSocket(request, ({ body, emit, approve, askContinue, signal }) =>
-          startTurn({ body, env, identity, url, emit, approve, askContinue, signal }).then(
-            (problem) => {
-              if (problem) emit({ type: "error", message: problem });
-            }
-          )
-        );
+      if (url.pathname === "/api/chat") {
+        if (isUpgrade(request)) return handleSocket(request, env, identity);
+        return handleChat(request, env, identity);
       }
 
-      if (url.pathname === "/api/chat") {
-        try {
-          return await handleChat(request, env, identity);
-        } catch (err) {
-          return jsonResponse({ error: "Chat request failed", details: String(err) }, 502);
+      if (url.pathname === "/api/settings") {
+        if (!env.MEMORY) {
+          return jsonResponse({ error: "Memory KV namespace not configured" }, 500);
         }
+        const kvKey = `settings:${identity.email}`;
+        
+        if (request.method === "GET") {
+          const raw = await env.MEMORY.get(kvKey);
+          let settings = null;
+          if (raw) {
+            try { settings = JSON.parse(raw); } catch {}
+          }
+          return jsonResponse({ settings });
+        }
+
+        if (request.method === "PUT") {
+          try {
+            const body = await request.json();
+            if (!body || typeof body !== "object") {
+              return jsonResponse({ error: "Expected a JSON settings object" }, 400);
+            }
+            await env.MEMORY.put(kvKey, JSON.stringify(body));
+            return jsonResponse({ ok: true });
+          } catch (err) {
+            return jsonResponse({ error: `Failed to save settings: ${err}` }, 400);
+          }
+        }
+
+        return jsonResponse({ error: "Method not allowed" }, 405);
       }
 
       return jsonResponse({ error: "Not found" }, 404);
     }
 
-    // Static files in public/ are matched before the Worker runs; anything
-    // else is a client-side route, so serve the app shell.
-    return env.ASSETS.fetch(new Request(new URL("/", url), request));
+    // Anything else falls through to the ASSETS binding (the public/ SPA shell).
+    return env.ASSETS.fetch(request);
   },
 };
