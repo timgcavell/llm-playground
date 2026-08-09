@@ -158,12 +158,20 @@ function syncProviderWarning() {
 
 function applySettingsToControls() {
   const config = settings();
+  if (config.provider && getProvider(config.provider)) {
+    el.provider.value = config.provider;
+  } else {
+    el.provider.value = defaultProvider();
+  }
+  populateModels(el.provider.value, config.model);
   el.system.value = config.system;
   el.temperature.value = config.temperature;
   el.temperatureValue.textContent = Number(config.temperature).toFixed(2);
   el.maxTokens.value = config.maxTokens;
   el.toolsEnabled.checked = Boolean(config.tools);
   el.useSocket.checked = Boolean(config.socket);
+  syncCapabilities();
+  syncProviderWarning();
 }
 
 function describeTools() {
@@ -355,54 +363,52 @@ el.toolsEnabled.addEventListener("change", () =>
   updateSettings({ tools: el.toolsEnabled.checked })
 );
 
-el.useSocket.addEventListener("change", () => updateSettings({ socket: el.useSocket.checked }));
+el.useSocket.addEventListener("change", () =>
+  updateSettings({ socket: el.useSocket.checked })
+);
 
-el.stop.addEventListener("click", () => inFlight?.abort());
-
-el.composer.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const text = el.prompt.value.trim();
-  if (!text || inFlight) return;
-  el.prompt.value = "";
-  send(text);
+el.prompt.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const text = el.prompt.value.trim();
+    if (text) {
+      el.prompt.value = "";
+      send(text);
+    }
+  }
 });
 
-el.prompt.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    el.composer.requestSubmit();
+el.composer.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = el.prompt.value.trim();
+  if (text) {
+    el.prompt.value = "";
+    send(text);
   }
+});
+
+el.stop.addEventListener("click", () => {
+  inFlight?.abort();
+});
+
+// Listen for server-side settings sync (e.g. loaded from KV)
+window.addEventListener("settings-synced", () => {
+  applySettingsToControls();
 });
 
 // ---------- Boot ----------
 
 async function boot() {
   load();
-  applySettingsToControls();
   renderThread();
-
   try {
     await loadCatalog();
+    populateProviders();
+    applySettingsToControls();
+    describeTools();
   } catch (err) {
-    setStatus(String(err.message || err), true);
-    return;
+    setStatus(`Failed to load provider list: ${err.message}`, true);
   }
-
-  populateProviders();
-  describeTools();
-  const config = settings();
-  const provider = getProvider(config.provider) || defaultProvider();
-  if (!provider) {
-    setStatus("No providers are available.", true);
-    return;
-  }
-
-  el.provider.value = provider.id;
-  populateModels(provider.id, config.model);
-  updateSettings({ provider: provider.id, model: currentModel() });
-  syncCapabilities();
-  syncProviderWarning();
-  el.prompt.focus();
 }
 
 boot();
