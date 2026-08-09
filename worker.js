@@ -191,14 +191,8 @@ async function handleChat(request, env, identity) {
 
   const stream = createEventStream();
 
-  // Not awaited: the response returns as soon as headers are ready, and the
-  // loop keeps writing to the stream until the conversation settles. Anything
-  // that goes wrong after this point is reported as an event rather than a
-  // status code, because the response has already begun.
   (async () => {
     try {
-      // No approve hook here: this response only flows one way, so there is
-      // no way for the browser to answer a question mid-turn.
       const problem = await startTurn({
         body,
         env,
@@ -221,24 +215,54 @@ async function handleChat(request, env, identity) {
   return new Response(stream.readable, { headers: sseHeaders() });
 }
 
+// ---------- Settings API (KV Persistence) ----------
+
+async function handleSettings(request, env, identity) {
+  if (!env.MEMORY) {
+    return jsonResponse({ error: "KV memory namespace not configured" }, 500);
+  }
+
+  const kvKey = `settings:${identity.email}`;
+
+  if (request.method === "GET") {
+    try {
+      const val = await env.MEMORY.get(kvKey);
+      const settings = val ? JSON.parse(val) : null;
+      return jsonResponse({ settings });
+    } catch (err) {
+      return jsonResponse({ error: `Failed to load settings: ${err}` }, 500);
+    }
+  }
+
+  if (request.method === "PUT") {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: "Invalid JSON" }, 400);
+    }
+
+    if (typeof body !== "object" || body === null) {
+      return jsonResponse({ error: "Expected JSON object" }, 400);
+    }
+
+    try {
+      await env.MEMORY.put(kvKey, JSON.stringify(body));
+      return jsonResponse({ ok: true });
+    } catch (err) {
+      return jsonResponse({ error: `Failed to save settings: ${err}` }, 500);
+    }
+  }
+
+  return jsonResponse({ error: "Method not allowed" }, 405);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // The issuer identifier clients compare against. Configured rather than
-    // derived, because request.url's host is whatever the last hop said it
-    // was — `wrangler dev` reports the route hostname on GET and the real one
-    // on POST, which would make discovery disagree with itself.
     const origin = env.PUBLIC_ORIGIN || url.origin;
 
-    // Discovery and token exchange must be reachable without a session: a
-    // client that doesn't have a token yet cannot be asked to present one.
-    // These need an Access bypass policy on the deployed app — see the README.
-    //
-    // RFC 9728 locates a resource's metadata by inserting the well-known
-    // segment *before* the resource's path, so a resource at /api/mcp is
-    // described at /.well-known/oauth-protected-resource/api/mcp. Both that
-    // and the bare form are served; a real client asks for the first.
     if (
       url.pathname === "/.well-known/oauth-protected-resource" ||
       url.pathname === `/.well-known/oauth-protected-resource${oauth.RESOURCE_PATH}`
@@ -251,39 +275,25 @@ export default {
     ) {
       return oauth.authorizationServerMetadata(origin);
     }
-    // Anything else under this prefix must 404 rather than fall through to the
-    // SPA below. Answering a discovery request with the app shell returns HTML
-    // and a 200, which a client reads as success and then cannot parse — the
-    // failure mode that hides itself.
     if (url.pathname.startsWith("/.well-known/oauth")) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if (url.pathname === "/oauth/register") return oauth.register(request, env);
     if (url.pathname === "/oauth/token") return oauth.token(request, env);
-    // A client handing back its own token needs no session, same as the
-    // exchange that issued it.
     if (url.pathname === "/oauth/revoke") return oauth.revoke(request, env);
 
-    // Consent, by contrast, is exactly where identity is needed, so it stays
-    // behind Access: the token is bound to whoever is signed in.
     if (url.pathname === "/oauth/authorize") {
       const identity = await authenticate(request, env);
       if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
       return oauth.authorize(request, env, identity.email, origin);
     }
 
-    // Reviewing and revoking what has been authorized. Gated, like consent:
-    // both are decisions only the account holder gets to make.
     if (url.pathname === "/connections") {
       const identity = await authenticate(request, env);
       if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
       return oauth.connections(request, env, identity.email);
     }
 
-    // MCP is OAuth-only. Access cannot gate this path — it answers a bearer
-    // token with a login redirect, which is a page no MCP client can read —
-    // so it is bypassed there and the Worker is the sole authority. That also
-    // means every caller arrives with scopes: there is no unscoped door.
     if (url.pathname === "/api/mcp") {
       const grant = await oauth.verifyBearer(request, env, origin);
       if (!grant) return oauth.unauthorized(origin);
@@ -298,38 +308,19 @@ export default {
         return jsonResponse({
           email: identity.email,
           providers: describeProviders(env),
-          tools: availableTools(buildToolContext(env, url, identity.email)).map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-          })),
+          tools: availableTools(env),
         });
       }
+      if (url.pathname === "/api/chat") return handleChat(request, env, identity);
+      if (url.pathname === "/api/settings") return handleSettings(request, env, identity);
 
-      // Two-way transport, so tools that need confirmation can ask.
-      if (url.pathname === "/api/socket") {
-        if (!isUpgrade(request)) return jsonResponse({ error: "Expected a WebSocket upgrade" }, 426);
-        return handleSocket(request, ({ body, emit, approve, askContinue, signal }) =>
-          startTurn({ body, env, identity, url, emit, approve, askContinue, signal }).then(
-            (problem) => {
-              if (problem) emit({ type: "error", message: problem });
-            }
-          )
-        );
-      }
-
-      if (url.pathname === "/api/chat") {
-        try {
-          return await handleChat(request, env, identity);
-        } catch (err) {
-          return jsonResponse({ error: "Chat request failed", details: String(err) }, 502);
-        }
+      if (isUpgrade(request)) {
+        return handleSocket(request, env, identity, buildToolContext);
       }
 
       return jsonResponse({ error: "Not found" }, 404);
     }
 
-    // Static files in public/ are matched before the Worker runs; anything
-    // else is a client-side route, so serve the app shell.
-    return env.ASSETS.fetch(new Request(new URL("/", url), request));
+    return env.ASSETS.fetch(request);
   },
 };
