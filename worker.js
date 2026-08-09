@@ -27,15 +27,7 @@ function jsonResponse(body, status = 200) {
 // Everything the tools are allowed to see. Built here rather than handing
 // tools.js the whole env, so the only secrets that reach a tool are the ones
 // it needs, and ask_model gets a narrow callback instead of the key ring.
-// Which model is running this turn, for tools that attribute their work. The
-// label is the catalog's, falling back to the raw id so a "Custom…" model is
-// still named rather than appearing as an anonymous commit.
-function describeAgent(provider, model) {
-  const known = provider.models.find((entry) => entry.id === model);
-  return { label: known?.label ?? model, provider: provider.label, model };
-}
-
-function buildToolContext(env, url, owner, agent = null) {
+function buildToolContext(env, url, owner) {
   const search = env.BRAVE_SEARCH_API_KEY
     ? { kind: "brave", key: env.BRAVE_SEARCH_API_KEY }
     : env.TAVILY_API_KEY
@@ -48,9 +40,6 @@ function buildToolContext(env, url, owner, agent = null) {
 
   return {
     selfHost: url ? url.hostname : null,
-    // Null when the caller is an MCP client: the model driving it is on the
-    // other side of the protocol and never identifies itself to us.
-    agent,
     search,
     // Headers are built here so the raw keys never enter the tool context —
     // a tool sees "what to send to which hosts", not the key ring.
@@ -167,12 +156,7 @@ async function startTurn({ body, env, identity, url, emit, approve, askContinue,
       signal,
       approve,
       askContinue,
-      toolContext: buildToolContext(
-        env,
-        url,
-        identity.email,
-        describeAgent(parsed.provider, parsed.model)
-      ),
+      toolContext: buildToolContext(env, url, identity.email),
     },
     emit
   );
@@ -305,6 +289,34 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/settings") {
+        const kvKey = `settings:${identity.email}`;
+        if (request.method === "GET") {
+          const raw = env.MEMORY ? await env.MEMORY.get(kvKey) : null;
+          let settings = null;
+          if (raw) {
+            try { settings = JSON.parse(raw); } catch {}
+          }
+          return jsonResponse({ settings });
+        }
+        if (request.method === "PUT") {
+          let body;
+          try {
+            body = await request.json();
+          } catch {
+            return jsonResponse({ error: "Invalid JSON" }, 400);
+          }
+          if (!body || typeof body !== "object") {
+            return jsonResponse({ error: "Expected settings object" }, 400);
+          }
+          if (env.MEMORY) {
+            await env.MEMORY.put(kvKey, JSON.stringify(body));
+          }
+          return jsonResponse({ ok: true });
+        }
+        return jsonResponse({ error: "Method not allowed" }, 405);
+      }
+
       // Two-way transport, so tools that need confirmation can ask.
       if (url.pathname === "/api/socket") {
         if (!isUpgrade(request)) return jsonResponse({ error: "Expected a WebSocket upgrade" }, 426);
@@ -318,18 +330,13 @@ export default {
       }
 
       if (url.pathname === "/api/chat") {
-        try {
-          return await handleChat(request, env, identity);
-        } catch (err) {
-          return jsonResponse({ error: "Chat request failed", details: String(err) }, 502);
-        }
+        return handleChat(request, env, identity);
       }
 
       return jsonResponse({ error: "Not found" }, 404);
     }
 
-    // Static files in public/ are matched before the Worker runs; anything
-    // else is a client-side route, so serve the app shell.
-    return env.ASSETS.fetch(new Request(new URL("/", url), request));
+    // Static assets (the SPA in public/) are served by the asset binding.
+    return env.ASSETS.fetch(request);
   },
 };
