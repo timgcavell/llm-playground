@@ -1,8 +1,7 @@
 # MCP attribution test
 
-Written through the production `/api/mcp` endpoint to check that a commit made
-over MCP is attributed to the calling client rather than to the app or to the
-account holder whose token signed it.
+Second attempt, made well after the production deploy of the MCP attribution
+fix, to distinguish a deployment race from a real defect.
 
 Expected author: the client's registered name, suffixed `(MCP client)`.
 
