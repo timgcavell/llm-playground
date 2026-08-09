@@ -124,6 +124,14 @@ The constraints that matter, since the model chooses the inputs:
 - **The GitHub default branch is refused outright.** The model proposes on a
   branch; you review and merge in GitHub. Everything these tools do is undoable
   there.
+- **Commits are attributed to the model, not to the token owner.** Git's own
+  split does the work: the *author* is the model that asked for the commit, the
+  *committer* is `llm-playground`, both at a non-routable address that matches
+  no GitHub account. Two things this cannot change — the token still identifies
+  you as the pusher, and a PR is always opened by the account the token belongs
+  to, since the API offers no way to say otherwise. The PR body carries a
+  footer naming the real author for that reason. `COMMIT_EMAIL` in
+  `worker/tools.js` is the address.
 - **Memory keys are namespaced by Access email** (`mem:<email>:<key>`), and `:`
   is excluded from keys so the owner prefix cannot be forged. `delete_memory`
   takes one exact key — no prefix or wildcard form.

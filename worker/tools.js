@@ -520,6 +520,32 @@ function githubError(step, result) {
   return { ok: false, content: `${step} failed: ${detail}` };
 }
 
+// Who a commit is attributed to.
+//
+// The token belongs to the account holder, so by default GitHub stamps their
+// name on work they did not write. Git already separates the two ideas that
+// matter here: the *author* wrote the change, the *committer* applied it. So
+// the author becomes the model that asked for the commit and the committer
+// becomes this app, which leaves the account holder's name off both.
+//
+// What this cannot change: the token still identifies the account holder as
+// the pusher, and a pull request is always opened by the account the token
+// belongs to. The GitHub API has no way to say otherwise, so `git log` is
+// honest and the PR author is not -- hence the footer on the body.
+//
+// The address is deliberately one that accepts no mail and matches no GitHub
+// account, so these commits stay unlinked to any profile rather than being
+// silently credited to a real person who happens to own the address.
+const COMMIT_EMAIL = "noreply@llm.timgcavell.com";
+const COMMITTER = { name: "llm-playground", email: COMMIT_EMAIL };
+
+// Falls back to the committer identity when nothing told us which model is
+// running -- an MCP client is driven by a model we never see.
+function commitAuthor(context) {
+  const label = context.agent?.label;
+  return label ? { name: label, email: COMMIT_EMAIL } : { ...COMMITTER };
+}
+
 async function githubWriteFile(input, context) {
   const repo = normalizeRepo(input?.repo);
   if (!repo) return { ok: false, content: `Refused: invalid repository. ${REPO_RULE}` };
@@ -580,10 +606,13 @@ async function githubWriteFile(input, context) {
   }
   const sha = existing.ok ? existing.data?.sha : undefined;
 
+  const author = commitAuthor(context);
   const put = await githubRequest(context, "PUT", `/repos/${repo}/contents/${encodeRepoPath(path)}`, {
     message,
     content: toBase64(content),
     branch,
+    author,
+    committer: COMMITTER,
     ...(sha ? { sha } : {}),
   });
   if (!put.ok) return githubError(`Committing ${path}`, put);
@@ -593,7 +622,8 @@ async function githubWriteFile(input, context) {
     ok: true,
     content:
       `${sha ? "Updated" : "Created"} ${path} on ${repo}@${branch}` +
-      `${createdBranch ? ` (branch created from ${defaultBranch})` : ""}. Commit ${commit}.`,
+      `${createdBranch ? ` (branch created from ${defaultBranch})` : ""}. ` +
+      `Commit ${commit}, authored as ${author.name}.`,
   };
 }
 
@@ -609,11 +639,19 @@ async function githubOpenPr(input, context) {
   const meta = await githubRequest(context, "GET", `/repos/${repo}`);
   if (!meta.ok) return githubError(`Looking up ${repo}`, meta);
 
+  // GitHub attributes a pull request to whoever owns the token, with no way to
+  // say otherwise, so the body is the only place the actual author can be
+  // named. Worth stating outright: a reviewer who sees the account holder's
+  // avatar on a PR should not have to guess whether they wrote it.
+  const author = commitAuthor(context);
+  const attribution = `Opened by ${author.name} via llm-playground, on behalf of the repository owner.`;
+  const trimmed = body.trim();
+
   const pr = await githubRequest(context, "POST", `/repos/${repo}/pulls`, {
     title,
     head,
     base: meta.data.default_branch,
-    body,
+    body: trimmed ? `${trimmed}\n\n---\n${attribution}` : attribution,
   });
   if (!pr.ok) {
     // 422 usually means "already exists" or "no commits between" — the

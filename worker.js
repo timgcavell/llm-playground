@@ -27,7 +27,15 @@ function jsonResponse(body, status = 200) {
 // Everything the tools are allowed to see. Built here rather than handing
 // tools.js the whole env, so the only secrets that reach a tool are the ones
 // it needs, and ask_model gets a narrow callback instead of the key ring.
-function buildToolContext(env, url, owner) {
+// Which model is running this turn, for tools that attribute their work. The
+// label is the catalog's, falling back to the raw id so a "Custom…" model is
+// still named rather than appearing as an anonymous commit.
+function describeAgent(provider, model) {
+  const known = provider.models.find((entry) => entry.id === model);
+  return { label: known?.label ?? model, provider: provider.label, model };
+}
+
+function buildToolContext(env, url, owner, agent = null) {
   const search = env.BRAVE_SEARCH_API_KEY
     ? { kind: "brave", key: env.BRAVE_SEARCH_API_KEY }
     : env.TAVILY_API_KEY
@@ -40,6 +48,9 @@ function buildToolContext(env, url, owner) {
 
   return {
     selfHost: url ? url.hostname : null,
+    // Null when the caller is an MCP client: the model driving it is on the
+    // other side of the protocol and never identifies itself to us.
+    agent,
     search,
     // Headers are built here so the raw keys never enter the tool context —
     // a tool sees "what to send to which hosts", not the key ring.
@@ -156,7 +167,12 @@ async function startTurn({ body, env, identity, url, emit, approve, askContinue,
       signal,
       approve,
       askContinue,
-      toolContext: buildToolContext(env, url, identity.email),
+      toolContext: buildToolContext(
+        env,
+        url,
+        identity.email,
+        describeAgent(parsed.provider, parsed.model)
+      ),
     },
     emit
   );
