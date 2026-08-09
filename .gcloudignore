@@ -1,9 +1,0 @@
-.git/
-node_modules/
-.wrangler/
-.dev.vars
-public/app.js
-public/app.js.map
-evals/results/
-worker.js
-worker/
