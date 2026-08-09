@@ -2,6 +2,26 @@ name = "llm-playground"
 main = "worker.js"
 compatibility_date = "2024-11-11"
 
+# Both of these are the defaults once routes are defined; stating them stops
+# Wrangler warning on every deploy that it is choosing for us, and pins the
+# behaviour rather than leaving it to change under a future default. They are
+# top-level keys, so they must stay above the first table header -- inside one
+# they silently become that table's fields.
+#
+# workers.dev stays off deliberately. Enabling it would publish production at a
+# second address outside Cloudflare Access -- the same shape of hole that a
+# separate hostname always opens, where the login is in front of one door and
+# not the other.
+workers_dev = false
+
+# Preview URLs are the exception, and they are overridable on their own: branch
+# builds run `wrangler versions upload`, and without this there is nothing to
+# click on. They live on workers.dev and are public, so the app shell is
+# world-readable there. Everything under /api/ still fails closed -- the Worker
+# verifies the Access token itself and refuses without one -- so what leaks is
+# markup, not keys or conversations.
+preview_urls = true
+
 [observability.logs]
 enabled = true
 invocation_logs = true
