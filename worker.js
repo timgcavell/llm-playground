@@ -35,6 +35,28 @@ function describeAgent(provider, model) {
   return { label: known?.label ?? model, provider: provider.label, model };
 }
 
+// The same, for a caller arriving over MCP. The model driving that client is on
+// the far side of the protocol and never identifies itself, so the best
+// available answer is the client's own registered name.
+//
+// That name is chosen by whoever registered the client and proves nothing --
+// registration is open, as the spec requires, so a hostile client can call
+// itself anything, including a person's name. Which is why it is never used
+// bare: the suffix means a commit can be traced to "something came in over
+// MCP calling itself this", and cannot be mistaken for a human committing
+// directly or for a turn in the playground. The consent screen solves the same
+// problem the same way, by showing what the client cannot fake.
+function describeMcpClient(name) {
+  // Newlines and control characters have no business in a git author field,
+  // and a name long enough to swallow the suffix would defeat the point of it.
+  const cleaned = String(name ?? "")
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  return { label: cleaned ? `${cleaned} (MCP client)` : "Unidentified MCP client" };
+}
+
 function buildToolContext(env, url, owner, agent = null) {
   const search = env.BRAVE_SEARCH_API_KEY
     ? { kind: "brave", key: env.BRAVE_SEARCH_API_KEY }
@@ -48,8 +70,9 @@ function buildToolContext(env, url, owner, agent = null) {
 
   return {
     selfHost: url ? url.hostname : null,
-    // Null when the caller is an MCP client: the model driving it is on the
-    // other side of the protocol and never identifies itself to us.
+    // Who is doing the work, for tools that attribute it: the model on a chat
+    // turn, the registered client name over MCP. Only null if a caller is
+    // added that supplies neither, which the tools handle rather than assume.
     agent,
     search,
     // Headers are built here so the raw keys never enter the tool context —
@@ -287,7 +310,11 @@ export default {
     if (url.pathname === "/api/mcp") {
       const grant = await oauth.verifyBearer(request, env, origin);
       if (!grant) return oauth.unauthorized(origin);
-      return handleMcp(request, buildToolContext(env, url, grant.identity), grant.scopes);
+      return handleMcp(
+        request,
+        buildToolContext(env, url, grant.identity, describeMcpClient(grant.clientName)),
+        grant.scopes
+      );
     }
 
     if (url.pathname.startsWith("/api/")) {

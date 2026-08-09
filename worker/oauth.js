@@ -691,11 +691,25 @@ export async function verifyBearer(request, env, origin) {
   const grant = await env.OAUTH.get(grantKey(reference.identity, reference.grant_id));
   if (!grant) return null;
 
+  // The grant is already loaded for the revocation check above, so the name the
+  // client registered under is free to carry along. Tools that attribute their
+  // work use it to say who asked. It is self-asserted -- registration is open,
+  // as the spec requires -- so callers must treat it as a label, never as proof
+  // of who is calling. A corrupt record should not fail an otherwise valid
+  // token, hence the absent name rather than a throw.
+  let clientName = null;
+  try {
+    clientName = JSON.parse(grant).client_name ?? null;
+  } catch {
+    // Leave it null; the caller has a fallback.
+  }
+
   return {
     identity: reference.identity,
     scopes: reference.scopes,
     clientId: reference.client_id,
     grantId: reference.grant_id,
+    clientName,
   };
 }
 

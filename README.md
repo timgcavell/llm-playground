@@ -132,6 +132,12 @@ The constraints that matter, since the model chooses the inputs:
   to, since the API offers no way to say otherwise. The PR body carries a
   footer naming the real author for that reason. `COMMIT_EMAIL` in
   `worker/tools.js` is the address.
+- **Over MCP the author is the client's registered name**, suffixed
+  `(MCP client)` — the model driving an external client never identifies itself,
+  so its name is the best available answer. The suffix is not decoration: that
+  name is self-asserted at registration and proves nothing, so it must never be
+  able to read as a person committing directly. A client calling itself
+  "Tim Cavell" commits as `Tim Cavell (MCP client)`.
 - **Memory keys are namespaced by Access email** (`mem:<email>:<key>`), and `:`
   is excluded from keys so the owner prefix cannot be forged. `delete_memory`
   takes one exact key — no prefix or wildcard form.
