@@ -238,7 +238,9 @@ async function send(text) {
 
     // Fixed for the turn: a mid-turn provider/model switch in the controls
     // shouldn't retroactively reprice tokens already spent on this message.
-    const price = priceFor(el.provider.value, model);
+    // Reads back from body, not el.provider.value — the dropdown can change
+    // while openSocket/openHttp is still connecting, after body was built.
+    const price = priceFor(body.provider, model);
 
     let streamError = null;
     // A turn with tool calls spans several upstream calls. Within one call the
