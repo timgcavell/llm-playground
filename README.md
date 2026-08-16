@@ -57,9 +57,9 @@ wrangler secret put GITHUB_API_KEY        # for the GitHub tools
 Locally they come from `.dev.vars` — copy `.dev.vars.example`. Only providers
 with a key are offered; the rest show as "(no key)".
 
-Two KV namespaces are bound in `wrangler.toml`: `MEMORY` for notes, `OAUTH` for
-clients, codes, and tokens. Kept separate so credentials and user notes never
-share a keyspace.
+Two KV namespaces are bound in `wrangler.toml`: `MEMORY` for notes and synced
+settings, `OAUTH` for clients, codes, and tokens. Kept separate so credentials
+and user notes never share a keyspace.
 
 **`CF_ACCESS_AUD` must be set before deploying.** The Worker spends your keys on
 behalf of whoever reaches it, so it fails closed: with no audience configured it
@@ -234,6 +234,8 @@ failure, so they can gate CI.
 
 ## State
 
-Conversation and settings live in `localStorage`; the Worker is stateless and
-the browser resends the full conversation each turn. Nothing is stored
-server-side except memory notes.
+The conversation lives only in `localStorage`; the Worker is stateless and the
+browser resends the full conversation each turn. Settings also cache there for
+a fast reload, but sync through `/api/settings` to `MEMORY`, keyed by Access
+email, so they follow you to a different browser or device. Nothing else is
+stored server-side except memory notes.

@@ -3,6 +3,7 @@ import { runAgent, runOnce } from "./worker/agent.js";
 import { PROVIDERS, describeProviders, modelCaps } from "./worker/providers.js";
 import { handleMcp } from "./worker/mcp.js";
 import * as oauth from "./worker/oauth.js";
+import { getSettings, putSettings } from "./worker/settings.js";
 import { handleSocket, isUpgrade } from "./worker/socket.js";
 import { createEventStream, sseHeaders } from "./worker/stream.js";
 import { CREDENTIALS, availableTools } from "./worker/tools.js";
@@ -330,6 +331,12 @@ export default {
             description: tool.description,
           })),
         });
+      }
+
+      if (url.pathname === "/api/settings") {
+        if (request.method === "GET") return getSettings(env, identity.email);
+        if (request.method === "PUT") return putSettings(request, env, identity.email);
+        return jsonResponse({ error: "Method not allowed" }, 405);
       }
 
       // Two-way transport, so tools that need confirmation can ask.
