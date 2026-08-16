@@ -5,7 +5,15 @@
 // event stream, so this file never knows which vendor answered.
 
 import { openHttp, openSocket } from "./lib/transport.js";
-import { capsFor, defaultProvider, getProvider, loadCatalog, providers, tools } from "./data/catalog.js";
+import {
+  capsFor,
+  defaultProvider,
+  getProvider,
+  loadCatalog,
+  priceFor,
+  providers,
+  tools,
+} from "./data/catalog.js";
 import {
   addMessage,
   clearMessages,
@@ -228,6 +236,10 @@ async function send(text) {
       ? await openSocket(body, inFlight.signal)
       : await openHttp(body, inFlight.signal);
 
+    // Fixed for the turn: a mid-turn provider/model switch in the controls
+    // shouldn't retroactively reprice tokens already spent on this message.
+    const price = priceFor(el.provider.value, model);
+
     let streamError = null;
     // A turn with tool calls spans several upstream calls. Within one call the
     // usage figure is a running total that gets restated, so the latest value
@@ -265,7 +277,7 @@ async function send(text) {
         handle.resolveTool(event);
       } else if (event.type === "meta") {
         usageByRound.set(event.round ?? 0, event.usage ?? {});
-        handle.setMeta(describeMeta({ stopReason: event.stopReason, usage: totalUsage() }));
+        handle.setMeta(describeMeta({ stopReason: event.stopReason, usage: totalUsage(), price }));
       } else if (event.type === "error") streamError = event.message;
       if (stick) scrollToBottom();
     }

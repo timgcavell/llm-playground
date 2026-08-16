@@ -24,6 +24,14 @@
 // as it streams rather than trying to reconstruct it afterwards.
 //
 // Adding a provider means adding one entry here. Nothing else changes.
+//
+// `price` (USD per million tokens) is spot-checked against each vendor's own
+// pricing page, not carried in from memory — vendors change these without
+// notice, and the models here are recent enough that a remembered number is
+// as likely to be wrong as right. A model with no `price` just doesn't show a
+// cost estimate, rather than showing a wrong one; `gemini-flash-latest` is
+// deliberately unpriced since it's an alias to whichever Flash build Google
+// is currently pointing it at.
 
 const ANTHROPIC_VERSION = "2023-06-01";
 
@@ -35,9 +43,28 @@ export const PROVIDERS = {
     // unrecognized model is assumed to behave the same way.
     defaultCaps: { temperature: false, thinking: true },
     models: [
-      { id: "claude-opus-5", label: "Claude Opus 5", temperature: false, thinking: true },
-      { id: "claude-sonnet-5", label: "Claude Sonnet 5", temperature: false, thinking: true },
-      { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", temperature: true, thinking: false },
+      {
+        id: "claude-opus-5",
+        label: "Claude Opus 5",
+        temperature: false,
+        thinking: true,
+        price: { input: 5, output: 25 },
+      },
+      {
+        id: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+        temperature: false,
+        thinking: true,
+        // Standard rate; $2/$10 introductory pricing runs through 2026-08-31.
+        price: { input: 3, output: 15 },
+      },
+      {
+        id: "claude-haiku-4-5",
+        label: "Claude Haiku 4.5",
+        temperature: true,
+        thinking: false,
+        price: { input: 1, output: 5 },
+      },
     ],
 
     request({ key, model, caps, system, messages, temperature, maxTokens, tools = null, extraTurns = [] }) {
@@ -173,12 +200,20 @@ export const PROVIDERS = {
     defaultCaps: { temperature: true, thinking: false },
     models: [
       { id: "gemini-flash-latest", label: "Gemini Flash Latest", temperature: true, thinking: true },
-      { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", temperature: true, thinking: true },
+      {
+        id: "gemini-3.6-flash",
+        label: "Gemini 3.6 Flash",
+        temperature: true,
+        thinking: true,
+        // Introductory rate through 2026-12-31; $1.50/$7.50 after.
+        price: { input: 0.75, output: 3.75 },
+      },
       {
         id: "gemini-3.5-flash-lite",
         label: "Gemini 3.5 Flash Lite",
         temperature: true,
         thinking: false,
+        price: { input: 0.3, output: 2.5 },
       },
     ],
 
@@ -289,12 +324,42 @@ export const PROVIDERS = {
     keyVar: "OPENAI_API_KEY",
     defaultCaps: { temperature: true, thinking: false },
     models: [
-      { id: "gpt-4.1", label: "GPT-4.1", temperature: true, thinking: false },
-      { id: "gpt-4.1-mini", label: "GPT-4.1 mini", temperature: true, thinking: false },
-      { id: "gpt-4o", label: "GPT-4o", temperature: true, thinking: false },
+      {
+        id: "gpt-4.1",
+        label: "GPT-4.1",
+        temperature: true,
+        thinking: false,
+        price: { input: 2, output: 8 },
+      },
+      {
+        id: "gpt-4.1-mini",
+        label: "GPT-4.1 mini",
+        temperature: true,
+        thinking: false,
+        price: { input: 0.4, output: 1.6 },
+      },
+      {
+        id: "gpt-4o",
+        label: "GPT-4o",
+        temperature: true,
+        thinking: false,
+        price: { input: 2.5, output: 10 },
+      },
       // Reasoning models reject temperature and keep their reasoning private.
-      { id: "o3", label: "o3", temperature: false, thinking: false },
-      { id: "o4-mini", label: "o4-mini", temperature: false, thinking: false },
+      {
+        id: "o3",
+        label: "o3",
+        temperature: false,
+        thinking: false,
+        price: { input: 2, output: 8 },
+      },
+      {
+        id: "o4-mini",
+        label: "o4-mini",
+        temperature: false,
+        thinking: false,
+        price: { input: 1.1, output: 4.4 },
+      },
     ],
 
     request({ key, model, caps, system, messages, temperature, maxTokens, tools = null, extraTurns = [] }) {
