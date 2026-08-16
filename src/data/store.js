@@ -1,9 +1,14 @@
 // Conversation and settings, kept in memory and written through to
-// localStorage so a reload picks up where the last one left off. Nothing here
-// touches the network: the Worker is stateless, and the browser resends the
-// whole conversation on every turn.
+// localStorage so a reload picks up where the last one left off.
+//
+// Settings also sync to the Worker's KV store, keyed by the signed-in Access
+// identity, so they follow you to a different browser or device. The
+// conversation itself stays local only — it's not namespaced by size the way
+// a KV value would need to be, and there's no reason a phone and a laptop
+// should share one transcript.
 
 const KEY = "llm-playground:v1";
+const REMOTE_SYNC_DEBOUNCE_MS = 800;
 
 const DEFAULT_SETTINGS = {
   provider: null,
@@ -41,6 +46,44 @@ function save() {
   }
 }
 
+// Pulls settings saved from another device and merges them in. Best-effort:
+// offline, a fresh install with nothing saved yet, or Access not configured
+// (local dev) should all just fall through to whatever localStorage had.
+export async function syncFromRemote() {
+  try {
+    const res = await fetch("/api/settings");
+    if (!res.ok) return;
+    const { settings: remote } = await res.json();
+    if (remote) {
+      Object.assign(state.settings, remote);
+      save();
+    }
+  } catch {
+    // Network error: local settings still work.
+  }
+}
+
+let syncTimer = null;
+
+// Debounced so a dragged slider or a typed system prompt doesn't fire a PUT
+// per keystroke; the last value within the window wins.
+function scheduleRemoteSync() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    syncTimer = null;
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(state.settings),
+      });
+    } catch {
+      // Best-effort: localStorage already has the change, and the next edit
+      // retries.
+    }
+  }, REMOTE_SYNC_DEBOUNCE_MS);
+}
+
 export function settings() {
   return state.settings;
 }
@@ -48,6 +91,7 @@ export function settings() {
 export function updateSettings(patch) {
   Object.assign(state.settings, patch);
   save();
+  scheduleRemoteSync();
 }
 
 export function messages() {

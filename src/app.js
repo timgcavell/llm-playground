@@ -14,6 +14,7 @@ import {
   messages,
   removeMessage,
   settings,
+  syncFromRemote,
   turnsForRequest,
   updateSettings,
 } from "./data/store.js";
@@ -378,15 +379,19 @@ el.prompt.addEventListener("keydown", (event) => {
 
 async function boot() {
   load();
-  applySettingsToControls();
   renderThread();
 
+  // Run together: syncFromRemote never throws (it's best-effort), so this
+  // waits on the catalog fetch's success or failure either way. Applying
+  // settings once, after both land, avoids painting controls with stale
+  // local values just before a remote value overwrites them.
   try {
-    await loadCatalog();
+    await Promise.all([loadCatalog(), syncFromRemote()]);
   } catch (err) {
     setStatus(String(err.message || err), true);
     return;
   }
+  applySettingsToControls();
 
   populateProviders();
   describeTools();
