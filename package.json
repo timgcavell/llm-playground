@@ -12,6 +12,6 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.1",
-    "wrangler": "^4.110.0"
+    "wrangler": "^4.123.0"
   }
 }
