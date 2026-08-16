@@ -46,3 +46,12 @@ export function capsFor(providerId, modelId) {
   const known = provider.models.find((m) => m.id === modelId);
   return known ? { temperature: known.temperature, thinking: known.thinking } : provider.defaultCaps;
 }
+
+// USD per million tokens, or null for a model the catalog doesn't price (a
+// hand-typed "Custom…" id, or an aliased model like gemini-flash-latest whose
+// backing version isn't fixed).
+export function priceFor(providerId, modelId) {
+  const provider = getProvider(providerId);
+  const known = provider?.models.find((m) => m.id === modelId);
+  return known?.price ?? null;
+}

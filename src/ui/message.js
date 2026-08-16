@@ -221,10 +221,22 @@ export function renderMessage(message) {
   };
 }
 
-export function describeMeta({ stopReason, usage }) {
+// price is USD per million tokens, { input, output } — null when the catalog
+// doesn't have a rate for this model, in which case the cost is just omitted
+// rather than shown as zero.
+function formatCost(usage, price) {
+  if (!price) return null;
+  const cost = ((usage.input ?? 0) * price.input + (usage.output ?? 0) * price.output) / 1_000_000;
+  if (cost <= 0) return null;
+  return cost < 0.0001 ? "<$0.0001" : `$${cost.toFixed(4)}`;
+}
+
+export function describeMeta({ stopReason, usage, price }) {
   const parts = [];
   if (usage && (usage.input || usage.output)) {
     parts.push(`${usage.input} in / ${usage.output} out tokens`);
+    const cost = formatCost(usage, price);
+    if (cost) parts.push(cost);
   }
   const settled = ["end_turn", "stop", "STOP", "tool_use", "tool_calls"];
   if (stopReason && !settled.includes(stopReason)) parts.push(`stopped: ${stopReason}`);
