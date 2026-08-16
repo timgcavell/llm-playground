@@ -106,41 +106,33 @@ Off by default; the settings panel turns them on.
 | `github_write_file` / `github_open_pr` | Commit one file to a branch; open a PR. | `GITHUB_API_KEY` |
 
 A tool whose backing key is missing is never offered, rather than offered and
-always failing.
+always failing. The model chooses the inputs, so a few things below matter.
 
-The constraints that matter, since the model chooses the inputs:
+`fetch_url` refuses non-http(s) schemes, this Worker's own origin, and
+private, loopback, and link-local addresses, `169.254.169.254` included —
+literals only, since a hostname that resolves private is the platform's job to
+catch, not this code's. Reads cap at 512 KB, 12,000 characters reach the
+model, 15s timeout, and whatever comes back is still untrusted content landing
+in the context window. Credentials for it (`CREDENTIALS` in `worker/tools.js`)
+are scoped per host and redirects are followed by hand, one hop at a time, so
+an authenticated host can't hand the token off to somewhere else via redirect.
 
-- **`fetch_url` is a request-forgery surface.** It refuses non-http(s) schemes,
-  this Worker's own origin, and private, loopback, and link-local addresses
-  including `169.254.169.254`. It blocks address *literals*; a hostname
-  resolving to a private address is the platform's boundary, not ours. Capped at
-  512 KB read, 12,000 characters to the model, 15s.
-- **Fetched pages are untrusted input** going into the context window. The
-  result says so. That is mitigation, not a guarantee.
-- **Credentials are scoped per host.** `CREDENTIALS` in `worker/tools.js` maps
-  each secret to the hosts it may go to. Redirects are followed manually with
-  the decision remade per hop, so an authenticated host redirecting elsewhere
-  cannot exfiltrate the token.
-- **The GitHub default branch is refused outright.** The model proposes on a
-  branch; you review and merge in GitHub. Everything these tools do is undoable
-  there.
-- **Commits are attributed to the model, not to the token owner.** Git's own
-  split does the work: the *author* is the model that asked for the commit, the
-  *committer* is `llm-playground`, both at a non-routable address that matches
-  no GitHub account. Two things this cannot change — the token still identifies
-  you as the pusher, and a PR is always opened by the account the token belongs
-  to, since the API offers no way to say otherwise. The PR body carries a
-  footer naming the real author for that reason. `COMMIT_EMAIL` in
-  `worker/tools.js` is the address.
-- **Over MCP the author is the client's registered name**, suffixed
-  `(MCP client)` — the model driving an external client never identifies itself,
-  so its name is the best available answer. The suffix is not decoration: that
-  name is self-asserted at registration and proves nothing, so it must never be
-  able to read as a person committing directly. A client calling itself
-  "Tim Cavell" commits as `Tim Cavell (MCP client)`.
-- **Memory keys are namespaced by Access email** (`mem:<email>:<key>`), and `:`
-  is excluded from keys so the owner prefix cannot be forged. `delete_memory`
-  takes one exact key — no prefix or wildcard form.
+`github_write_file` and `github_open_pr` refuse the default branch outright —
+the model proposes on a branch, you review and merge yourself.
+
+Commits are attributed to the model, not the token: the git author/committer
+split names the model as author and `llm-playground` as committer, both at a
+non-routable address (`COMMIT_EMAIL` in `worker/tools.js`). That can't hide
+the token owner entirely — GitHub only lets a PR be opened by the token's own
+account — so the PR body names the real author in a footer. Over MCP there's
+no model identity to use, so the author is the client's self-registered name
+with `(MCP client)` appended (`Tim Cavell (MCP client)` for a client that
+calls itself that); the name is unverified, so the suffix has to stay so it
+never reads as a person committing directly.
+
+Memory keys are namespaced by Access email (`mem:<email>:<key>`, with `:`
+excluded from user keys so the prefix can't be forged), and `delete_memory`
+only takes one exact key — no wildcards.
 
 ## Transports
 
